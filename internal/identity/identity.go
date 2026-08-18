@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"net/url"
+	"os"
 	"strings"
 )
 
@@ -13,6 +15,48 @@ type Info struct {
 	Hostname      string `json:"hostname"`
 	PrimaryIP     string `json:"primaryIp"`
 	MACAddress    string `json:"macAddress"`
+}
+
+func Discover(machineIDPath, managementURL string) (Info, error) {
+	machineID, err := os.ReadFile(machineIDPath)
+	if err != nil {
+		return Info{}, fmt.Errorf("read machine identity: %w", err)
+	}
+	hostname, err := os.Hostname()
+	if err != nil {
+		return Info{}, fmt.Errorf("read hostname: %w", err)
+	}
+	u, err := url.Parse(managementURL)
+	if err != nil || u.Hostname() == "" {
+		return Info{}, fmt.Errorf("invalid management URL")
+	}
+	port := u.Port()
+	if port == "" {
+		port = "443"
+	}
+	connection, err := net.Dial("udp", net.JoinHostPort(u.Hostname(), port))
+	if err != nil {
+		return Info{}, fmt.Errorf("resolve primary route: %w", err)
+	}
+	primaryIP := connection.LocalAddr().(*net.UDPAddr).IP
+	_ = connection.Close()
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return Info{}, fmt.Errorf("list network interfaces: %w", err)
+	}
+	for _, networkInterface := range interfaces {
+		addresses, addressErr := networkInterface.Addrs()
+		if addressErr != nil {
+			continue
+		}
+		for _, address := range addresses {
+			ip, _, parseErr := net.ParseCIDR(address.String())
+			if parseErr == nil && ip.Equal(primaryIP) {
+				return Build(string(machineID), hostname, primaryIP.String(), networkInterface.HardwareAddr.String())
+			}
+		}
+	}
+	return Info{}, fmt.Errorf("primary route interface was not found")
 }
 
 func Build(machineID, hostname, primaryIP, macAddress string) (Info, error) {

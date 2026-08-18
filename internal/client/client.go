@@ -15,11 +15,14 @@ import (
 
 	"xkp-agent/internal/config"
 	"xkp-agent/internal/identity"
+	"xkp-agent/internal/runtime"
 )
 
 type Client struct {
-	baseURL string
-	http    *http.Client
+	baseURL    string
+	agentID    string
+	credential string
+	http       *http.Client
 }
 type Enrollment struct {
 	AgentID    string `json:"agentId"`
@@ -39,10 +42,15 @@ func New(cfg config.Config) (*Client, error) {
 		}
 		transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}
 	}
-	return &Client{baseURL: strings.TrimRight(cfg.ManagementURL, "/"), http: &http.Client{Transport: transport, Timeout: 15 * time.Second}}, nil
+	return &Client{baseURL: strings.TrimRight(cfg.ManagementURL, "/"), agentID: cfg.AgentID,
+		credential: cfg.Credential, http: &http.Client{Transport: transport, Timeout: 35 * time.Second}}, nil
 }
 
 func (c *Client) Enroll(ctx context.Context, token string, info identity.Info) (Enrollment, error) {
+	return c.EnrollWithDisplayName(ctx, token, info.Hostname, info)
+}
+
+func (c *Client) EnrollWithDisplayName(ctx context.Context, token, displayName string, info identity.Info) (Enrollment, error) {
 	payload := struct {
 		Token         string `json:"token"`
 		DisplayName   string `json:"displayName"`
@@ -51,7 +59,7 @@ func (c *Client) Enroll(ctx context.Context, token string, info identity.Info) (
 		PrimaryIP     string `json:"primaryIp"`
 		MACAddress    string `json:"macAddress"`
 		AgentVersion  string `json:"agentVersion"`
-	}{token, info.Hostname, info.MachineDigest, info.Hostname, info.PrimaryIP, info.MACAddress, "0.1.0"}
+	}{token, displayName, info.MachineDigest, info.Hostname, info.PrimaryIP, info.MACAddress, "0.1.0"}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return Enrollment{}, fmt.Errorf("encode enrollment request")
@@ -78,4 +86,61 @@ func (c *Client) Enroll(ctx context.Context, token string, info identity.Info) (
 		return Enrollment{}, fmt.Errorf("enrollment response is incomplete")
 	}
 	return result, nil
+}
+
+func (c *Client) Heartbeat(ctx context.Context, request runtime.HeartbeatRequest) (runtime.HeartbeatAck, error) {
+	var ack runtime.HeartbeatAck
+	if err := c.authenticatedJSON(ctx, http.MethodPost, "/agent/v1/heartbeat", request, &ack); err != nil {
+		return ack, err
+	}
+	return ack, nil
+}
+
+func (c *Client) PollCommands(ctx context.Context, waitSeconds int) ([]json.RawMessage, error) {
+	if waitSeconds < 0 || waitSeconds > 25 {
+		return nil, fmt.Errorf("invalid command poll wait")
+	}
+	var response struct {
+		Commands []json.RawMessage `json:"commands"`
+	}
+	path := fmt.Sprintf("/agent/v1/commands/poll?waitSeconds=%d", waitSeconds)
+	if err := c.authenticatedJSON(ctx, http.MethodGet, path, nil, &response); err != nil {
+		return nil, err
+	}
+	return response.Commands, nil
+}
+
+func (c *Client) authenticatedJSON(ctx context.Context, method, path string, payload, result interface{}) error {
+	if c.agentID == "" || c.credential == "" {
+		return fmt.Errorf("agent is not enrolled")
+	}
+	var body io.Reader
+	if payload != nil {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("encode agent request")
+		}
+		body = bytes.NewReader(encoded)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
+	if err != nil {
+		return fmt.Errorf("create agent request")
+	}
+	req.Header.Set("Authorization", "Bearer "+c.credential)
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("agent request failed")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return fmt.Errorf("agent request rejected with status %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(result); err != nil {
+		return fmt.Errorf("decode agent response")
+	}
+	return nil
 }
