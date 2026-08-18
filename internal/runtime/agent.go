@@ -37,6 +37,7 @@ type Transport interface {
 
 type CommandHandler interface {
 	Dispatch(context.Context, protocol.Command) error
+	RetryPending(context.Context) (bool, error)
 }
 
 type Agent struct {
@@ -138,6 +139,13 @@ func (a *Agent) commandLoop(ctx context.Context) {
 }
 
 func (a *Agent) processCommandsOnce(ctx context.Context) error {
+	retried, err := a.commandHandler.RetryPending(ctx)
+	if err != nil {
+		return err
+	}
+	if retried {
+		return nil
+	}
 	commands, err := a.transport.PollCommands(ctx, 25)
 	if err != nil {
 		return err

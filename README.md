@@ -64,9 +64,25 @@ Docker daemon, or workspace mount is reported as a stable collector error while
 available metrics continue to flow. Network failures use capped retry with jitter;
 the credential remains local and reconnect is automatic.
 
-This release polls the authenticated command endpoint but does not execute any
-server power or container commands. Do not add shell command execution or expose
-the Docker socket over TCP as a workaround.
+The Agent polls the authenticated command endpoint and accepts only the version-one
+`SHUTDOWN_SERVER` command. It acknowledges the lease before calling the fixed
+`/usr/bin/loginctl poweroff` executable directly; command payloads can never select
+a program or arguments. The installer adds a narrowly scoped polkit rule that
+allows only the `xkp-agent` service account and only the two systemd-logind power-off
+actions. Container commands and arbitrary shell execution are not supported. Do
+not expose the Docker socket over TCP as a workaround.
+
+Before power-off, the Agent persists the leased command in
+`/etc/xkp-agent/pending-command.json` with mode `0600`. A bounded result is saved
+before upload and cleared only after the management server acknowledges it. After
+a network failure or process restart, the Agent retries that saved result before
+long polling and never executes the same power command twice. If the process ended
+between accepting the command and saving its outcome, it reports
+`EXECUTION_OUTCOME_UNKNOWN` for management-side reconciliation.
+
+Before production acceptance, verify that the systemd service account can execute
+`loginctl poweroff` through the installed policy and perform a real shutdown test on the Ubuntu processing
+server. Windows builds remain development-only and fail closed for power control.
 
 Uninstall while retaining identity:
 

@@ -23,6 +23,7 @@ type fakeTransport struct {
 	sequences []int64
 	block     bool
 	commands  []json.RawMessage
+	polls     int
 }
 
 func (f *fakeTransport) Heartbeat(ctx context.Context, request HeartbeatRequest) (HeartbeatAck, error) {
@@ -40,6 +41,7 @@ func (f *fakeTransport) Heartbeat(ctx context.Context, request HeartbeatRequest)
 	return HeartbeatAck{Accepted: f.accepted, Sequence: request.Sequence}, nil
 }
 func (f *fakeTransport) PollCommands(ctx context.Context, _ int) ([]json.RawMessage, error) {
+	f.polls++
 	if f.block {
 		<-ctx.Done()
 		return nil, ctx.Err()
@@ -50,11 +52,16 @@ func (f *fakeTransport) PollCommands(ctx context.Context, _ int) ([]json.RawMess
 type commandHandlerStub struct {
 	commands []protocol.Command
 	err      error
+	retried  bool
 }
 
 func (h *commandHandlerStub) Dispatch(_ context.Context, command protocol.Command) error {
 	h.commands = append(h.commands, command)
 	return h.err
+}
+
+func (h *commandHandlerStub) RetryPending(context.Context) (bool, error) {
+	return h.retried, h.err
 }
 
 func TestSequenceRetriesAndDuplicateAcknowledgementAdvances(t *testing.T) {
@@ -123,5 +130,18 @@ func TestProcessCommandsOnceRejectsInvalidEnvelopeBeforeDispatch(t *testing.T) {
 	}
 	if len(handler.commands) != 0 {
 		t.Fatalf("invalid command dispatched: %#v", handler.commands)
+	}
+}
+
+func TestProcessCommandsRetriesPendingResultBeforeLongPolling(t *testing.T) {
+	transport := &fakeTransport{}
+	handler := &commandHandlerStub{retried: true}
+	agent := NewAgent("agent", "0.1.0", fakeGatherer{}, transport, handler)
+
+	if err := agent.processCommandsOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if transport.polls != 0 {
+		t.Fatalf("polled while a stored result was retried: %d", transport.polls)
 	}
 }

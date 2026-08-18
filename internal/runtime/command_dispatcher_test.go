@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -95,6 +96,73 @@ func TestDispatcherReportsCancellation(t *testing.T) {
 	power := &powerStub{order: &transport.order, err: context.Canceled}
 	_ = NewCommandDispatcher(transport, power).Dispatch(context.Background(), shutdownCommand())
 	if transport.lastResult.Code != "COMMAND_CANCELLED" {
+		t.Fatalf("result = %#v", transport.lastResult)
+	}
+}
+
+func TestDispatcherRetriesStoredResultWithoutExecutingPoweroffAgain(t *testing.T) {
+	transport := &commandTransportStub{finishErr: errors.New("network")}
+	power := &powerStub{order: &transport.order}
+	statePath := filepath.Join(t.TempDir(), "pending-command.json")
+	dispatcher := NewCommandDispatcherWithStore(transport, power, NewFileCommandStore(statePath))
+	command := shutdownCommand()
+
+	if err := dispatcher.Dispatch(context.Background(), command); err == nil {
+		t.Fatal("expected first result report failure")
+	}
+	if power.calls != 1 {
+		t.Fatalf("power calls = %d", power.calls)
+	}
+	transport.finishErr = nil
+	transport.order = nil
+	if err := dispatcher.Dispatch(context.Background(), command); err != nil {
+		t.Fatal(err)
+	}
+	if power.calls != 1 {
+		t.Fatalf("poweroff repeated, calls = %d", power.calls)
+	}
+	if !reflect.DeepEqual(transport.order, []string{"result"}) {
+		t.Fatalf("retry order = %v", transport.order)
+	}
+}
+
+func TestDispatcherRetriesStoredResultWithoutWaitingForCommandRedelivery(t *testing.T) {
+	transport := &commandTransportStub{finishErr: errors.New("network")}
+	power := &powerStub{order: &transport.order}
+	statePath := filepath.Join(t.TempDir(), "pending-command.json")
+	dispatcher := NewCommandDispatcherWithStore(transport, power, NewFileCommandStore(statePath))
+
+	if err := dispatcher.Dispatch(context.Background(), shutdownCommand()); err == nil {
+		t.Fatal("expected first result report failure")
+	}
+	transport.finishErr = nil
+	transport.order = nil
+	retried, err := dispatcher.RetryPending(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !retried || power.calls != 1 || !reflect.DeepEqual(transport.order, []string{"result"}) {
+		t.Fatalf("retried=%v power calls=%d order=%v", retried, power.calls, transport.order)
+	}
+}
+
+func TestDispatcherReportsUnknownOutcomeAfterRestartWithoutRepeatingPoweroff(t *testing.T) {
+	transport := &commandTransportStub{}
+	power := &powerStub{order: &transport.order}
+	store := &memoryCommandStore{state: &StoredCommand{
+		CommandID:  shutdownCommand().CommandID,
+		LeaseToken: shutdownCommand().LeaseToken,
+	}}
+	dispatcher := NewCommandDispatcherWithStore(transport, power, store)
+
+	retried, err := dispatcher.RetryPending(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !retried || power.calls != 0 {
+		t.Fatalf("retried=%v power calls=%d", retried, power.calls)
+	}
+	if transport.lastResult.Code != "EXECUTION_OUTCOME_UNKNOWN" || transport.lastResult.Success {
 		t.Fatalf("result = %#v", transport.lastResult)
 	}
 }

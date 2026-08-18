@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -71,7 +72,9 @@ func main() {
 	}
 
 	gatherer := collect.NewMultiCollector(collect.NewSystemCollector(cfg.WorkspacePath), collect.NewNvidiaCollector(), collect.NewDockerCollector())
-	dispatcher := agentruntime.NewCommandDispatcher(api, power.NewController())
+	commandStore := agentruntime.NewFileCommandStore(filepath.Join(filepath.Dir(*configPath),
+		"pending-command.json"))
+	dispatcher := agentruntime.NewCommandDispatcherWithStore(api, power.NewController(), commandStore)
 	agent := agentruntime.NewAgent(cfg.AgentID, version, gatherer, api, dispatcher)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

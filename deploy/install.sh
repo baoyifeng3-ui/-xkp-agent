@@ -27,6 +27,8 @@ source /etc/os-release
 [[ -n "$registration_token" && -n "$display_name" ]] || die 'Registration token and display name are required'
 [[ "$management_url$display_name$workspace" != *$'\n'* ]] || die 'Arguments must not contain newlines'
 getent group docker >/dev/null || die 'Docker group does not exist; install Docker first'
+command -v loginctl >/dev/null || die 'loginctl is required for power control'
+[[ -d /etc/polkit-1/rules.d ]] || die 'polkit rules directory is missing; install polkit first'
 
 id xkp-agent >/dev/null 2>&1 || useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin xkp-agent
 for group_name in docker video render; do getent group "$group_name" >/dev/null && usermod -aG "$group_name" xkp-agent; done
@@ -34,6 +36,8 @@ install -d -m 0700 -o xkp-agent -g xkp-agent /etc/xkp-agent
 install -d -m 0750 -o xkp-agent -g xkp-agent "$workspace"
 install -m 0755 "$binary" /usr/local/bin/xkp-agent
 install -m 0644 "$ca_file" /etc/xkp-agent/ca.crt
+install -m 0644 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/xkp-agent-power.rules" \
+  /etc/polkit-1/rules.d/60-xkp-agent-power.rules
 install -m 0600 -o xkp-agent -g xkp-agent /dev/null /etc/xkp-agent/agent.yml
 
 yaml_escape() { local value=${1//\\/\\\\}; value=${value//\"/\\\"}; printf '%s' "$value"; }

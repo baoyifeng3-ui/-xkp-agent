@@ -1,0 +1,9 @@
+polkit.addRule(function(action, subject) {
+    var powerActions = [
+        "org.freedesktop.login1.power-off",
+        "org.freedesktop.login1.power-off-multiple-sessions"
+    ];
+    if (subject.user === "xkp-agent" && powerActions.indexOf(action.id) >= 0) {
+        return polkit.Result.YES;
+    }
+});

@@ -26,7 +26,7 @@ func TestLinuxControllerRunsExactSystemctlPoweroff(t *testing.T) {
 	if err := controller.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if runner.name != "systemctl" || !reflect.DeepEqual(runner.args, []string{"poweroff"}) {
+	if runner.name != "/usr/bin/loginctl" || !reflect.DeepEqual(runner.args, []string{"poweroff"}) {
 		t.Fatalf("command = %q %v", runner.name, runner.args)
 	}
 }

@@ -115,9 +115,19 @@ func (c *Client) StartCommand(ctx context.Context, commandID, leaseToken string)
 	payload := struct {
 		LeaseToken string `json:"leaseToken"`
 	}{LeaseToken: leaseToken}
-	var response map[string]interface{}
+	var response struct {
+		CommandID string `json:"commandId"`
+		AgentID   string `json:"agentId"`
+		State     string `json:"state"`
+	}
 	path := "/agent/v1/commands/" + commandID + "/start"
-	return c.authenticatedJSON(ctx, http.MethodPost, path, payload, &response)
+	if err := c.authenticatedJSON(ctx, http.MethodPost, path, payload, &response); err != nil {
+		return err
+	}
+	if response.CommandID != commandID || response.AgentID != c.agentID || response.State != "RUNNING" {
+		return fmt.Errorf("command acknowledgement is invalid")
+	}
+	return nil
 }
 
 func (c *Client) FinishCommand(ctx context.Context, commandID string, result protocol.CommandResult) error {

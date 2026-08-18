@@ -53,7 +53,11 @@ func TestCommandStartAndResultUseAuthenticatedVersionOnePaths(t *testing.T) {
 		requests <- r.Clone(context.Background())
 		bodies <- body
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"state":"accepted"}`))
+		if strings.HasSuffix(r.URL.Path, "/start") {
+			_, _ = w.Write([]byte(`{"commandId":"11111111-2222-4333-8444-555555555555","agentId":"agent-id","state":"RUNNING"}`))
+		} else {
+			_, _ = w.Write([]byte(`{"state":"FAILED"}`))
+		}
 	}))
 	defer server.Close()
 	c, err := New(config.Config{ManagementURL: server.URL, AgentID: "agent-id",
@@ -104,5 +108,30 @@ func TestCommandAcknowledgementRejectsNonSuccessWithoutLeakingBody(t *testing.T)
 	}
 	if strings.Contains(err.Error(), "secret backend details") || strings.Contains(err.Error(), "lease-secret") {
 		t.Fatal("command acknowledgement leaked sensitive content")
+	}
+}
+
+func TestCommandAcknowledgementRejectsUnexpectedSuccessStateOrIdentity(t *testing.T) {
+	cases := []string{
+		`{"commandId":"11111111-2222-4333-8444-555555555555","agentId":"agent-id","state":"SUCCEEDED"}`,
+		`{"commandId":"99999999-2222-4333-8444-555555555555","agentId":"agent-id","state":"RUNNING"}`,
+		`{"commandId":"11111111-2222-4333-8444-555555555555","agentId":"other-agent","state":"RUNNING"}`,
+	}
+	for _, body := range cases {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(body))
+		}))
+		c, err := New(config.Config{ManagementURL: server.URL, AgentID: "agent-id",
+			Credential: "agent-secret", Development: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = c.StartCommand(context.Background(), "11111111-2222-4333-8444-555555555555",
+			"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+		server.Close()
+		if err == nil {
+			t.Fatalf("unexpected acknowledgement accepted: %s", body)
+		}
 	}
 }

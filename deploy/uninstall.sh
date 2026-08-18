@@ -6,7 +6,8 @@ while (($#)); do
 done
 [[ ${EUID:-$(id -u)} == 0 ]] || { printf 'Run as root\n' >&2; exit 1; }
 systemctl disable --now xkp-agent.service >/dev/null 2>&1 || true
-rm -f /etc/systemd/system/xkp-agent.service /usr/local/bin/xkp-agent
+rm -f /etc/systemd/system/xkp-agent.service /usr/local/bin/xkp-agent \
+  /etc/polkit-1/rules.d/60-xkp-agent-power.rules
 systemctl daemon-reload
 if ((purge)); then
   ((confirm)) || { printf 'Identity purge requires --confirm-purge\n' >&2; exit 1; }

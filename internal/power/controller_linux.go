@@ -23,7 +23,7 @@ func NewLinuxController(runner CommandRunner) Controller {
 }
 
 func (c *linuxController) Shutdown(ctx context.Context) error {
-	return c.runner.Run(ctx, "systemctl", "poweroff")
+	return c.runner.Run(ctx, "/usr/bin/loginctl", "poweroff")
 }
 
 type execRunner struct{}
