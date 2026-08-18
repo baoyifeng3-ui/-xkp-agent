@@ -1,0 +1,8 @@
+{
+  "commandId": "11111111-2222-4333-8444-555555555555",
+  "type": "SHUTDOWN_SERVER",
+  "version": 1,
+  "leaseToken": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+  "leaseExpiresAt": "2026-08-19T12:05:00Z",
+  "payload": {}
+}
