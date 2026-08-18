@@ -1,0 +1,7 @@
+/dist/
+/xkp-agent
+config.local.yaml
+credentials.yaml
+*.key
+*.pem
+test-certificates/
