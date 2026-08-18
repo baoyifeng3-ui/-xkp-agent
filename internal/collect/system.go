@@ -38,26 +38,36 @@ func NewSystemCollector(workspace string) *SystemCollector {
 
 func (c *SystemCollector) Name() string { return "system" }
 func (c *SystemCollector) Collect(ctx context.Context) (Snapshot, error) {
+	snapshot := Snapshot{}
 	cpuValue, err := c.cpuPercent(ctx)
 	if err != nil {
-		return Snapshot{}, NewCollectorError("SYSTEM_UNAVAILABLE", err)
+		return snapshot, NewCollectorError("SYSTEM_UNAVAILABLE", err)
 	}
+	snapshot.CPUPercent = &cpuValue
 	total, used, ramValue, err := c.memory(ctx)
 	if err != nil {
-		return Snapshot{}, NewCollectorError("SYSTEM_UNAVAILABLE", err)
+		return snapshot, NewCollectorError("SYSTEM_UNAVAILABLE", err)
 	}
+	snapshot.RAMTotalBytes = &total
+	snapshot.RAMUsedBytes = &used
+	snapshot.RAMPercent = &ramValue
 	systemDisk, err := c.diskUsage("/")
 	if err != nil {
-		return Snapshot{}, NewCollectorError("SYSTEM_DISK_UNAVAILABLE", err)
+		return snapshot, NewCollectorError("SYSTEM_DISK_UNAVAILABLE", err)
 	}
+	systemPercent := clamp(systemDisk.UsedPercent)
+	snapshot.SystemDiskTotalBytes = &systemDisk.Total
+	snapshot.SystemDiskUsedBytes = &systemDisk.Used
+	snapshot.SystemDiskPercent = &systemPercent
 	workspaceDisk, err := c.diskUsage(c.workspace)
 	if err != nil {
-		return Snapshot{}, NewCollectorError("WORKSPACE_DISK_UNAVAILABLE", err)
+		return snapshot, NewCollectorError("WORKSPACE_DISK_UNAVAILABLE", err)
 	}
-	systemPercent, workspacePercent := clamp(systemDisk.UsedPercent), clamp(workspaceDisk.UsedPercent)
-	return Snapshot{CPUPercent: &cpuValue, RAMTotalBytes: &total, RAMUsedBytes: &used, RAMPercent: &ramValue,
-		SystemDiskTotalBytes: &systemDisk.Total, SystemDiskUsedBytes: &systemDisk.Used, SystemDiskPercent: &systemPercent,
-		WorkspaceDiskTotalBytes: &workspaceDisk.Total, WorkspaceDiskUsedBytes: &workspaceDisk.Used, WorkspaceDiskPercent: &workspacePercent}, nil
+	workspacePercent := clamp(workspaceDisk.UsedPercent)
+	snapshot.WorkspaceDiskTotalBytes = &workspaceDisk.Total
+	snapshot.WorkspaceDiskUsedBytes = &workspaceDisk.Used
+	snapshot.WorkspaceDiskPercent = &workspacePercent
+	return snapshot, nil
 }
 
 func clamp(value float64) float64 {

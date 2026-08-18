@@ -2,6 +2,7 @@ package collect
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/shirou/gopsutil/v4/disk"
@@ -29,5 +30,25 @@ func TestSystemCollectorKeepsSystemAndWorkspaceDisksDistinct(t *testing.T) {
 	}
 	if *got.SystemDiskPercent != 20 || *got.WorkspaceDiskPercent != 50 {
 		t.Fatalf("disk metrics = %#v", got)
+	}
+}
+
+func TestSystemCollectorPreservesMetricsWhenWorkspaceDiskIsUnavailable(t *testing.T) {
+	c := NewSystemCollector("/missing-workspace")
+	c.cpuPercent = func(context.Context) (float64, error) { return 10, nil }
+	c.memory = func(context.Context) (uint64, uint64, float64, error) { return 100, 50, 50, nil }
+	c.diskUsage = func(path string) (*disk.UsageStat, error) {
+		if path == "/" {
+			return &disk.UsageStat{Total: 1000, Used: 200, UsedPercent: 20}, nil
+		}
+		return nil, errors.New("workspace is not mounted")
+	}
+
+	got := Gather(context.Background(), c)
+	if got.CPUPercent == nil || *got.CPUPercent != 10 || got.SystemDiskPercent == nil || *got.SystemDiskPercent != 20 {
+		t.Fatalf("partial system metrics = %#v", got)
+	}
+	if got.WorkspaceDiskPercent != nil || got.CollectorErrors["system"] != "WORKSPACE_DISK_UNAVAILABLE" {
+		t.Fatalf("workspace degradation = %#v", got)
 	}
 }
