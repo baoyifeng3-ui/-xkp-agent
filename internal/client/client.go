@@ -15,6 +15,7 @@ import (
 
 	"xkp-agent/internal/config"
 	"xkp-agent/internal/identity"
+	"xkp-agent/internal/protocol"
 	"xkp-agent/internal/runtime"
 )
 
@@ -108,6 +109,21 @@ func (c *Client) PollCommands(ctx context.Context, waitSeconds int) ([]json.RawM
 		return nil, err
 	}
 	return response.Commands, nil
+}
+
+func (c *Client) StartCommand(ctx context.Context, commandID, leaseToken string) error {
+	payload := struct {
+		LeaseToken string `json:"leaseToken"`
+	}{LeaseToken: leaseToken}
+	var response map[string]interface{}
+	path := "/agent/v1/commands/" + commandID + "/start"
+	return c.authenticatedJSON(ctx, http.MethodPost, path, payload, &response)
+}
+
+func (c *Client) FinishCommand(ctx context.Context, commandID string, result protocol.CommandResult) error {
+	var response map[string]interface{}
+	path := "/agent/v1/commands/" + commandID + "/result"
+	return c.authenticatedJSON(ctx, http.MethodPost, path, result, &response)
 }
 
 func (c *Client) authenticatedJSON(ctx context.Context, method, path string, payload, result interface{}) error {

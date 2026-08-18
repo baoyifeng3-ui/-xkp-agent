@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"xkp-agent/internal/collect"
+	"xkp-agent/internal/protocol"
 )
 
 type fakeGatherer struct{}
@@ -21,6 +22,7 @@ type fakeTransport struct {
 	accepted  bool
 	sequences []int64
 	block     bool
+	commands  []json.RawMessage
 }
 
 func (f *fakeTransport) Heartbeat(ctx context.Context, request HeartbeatRequest) (HeartbeatAck, error) {
@@ -42,12 +44,22 @@ func (f *fakeTransport) PollCommands(ctx context.Context, _ int) ([]json.RawMess
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
-	return nil, nil
+	return f.commands, nil
+}
+
+type commandHandlerStub struct {
+	commands []protocol.Command
+	err      error
+}
+
+func (h *commandHandlerStub) Dispatch(_ context.Context, command protocol.Command) error {
+	h.commands = append(h.commands, command)
+	return h.err
 }
 
 func TestSequenceRetriesAndDuplicateAcknowledgementAdvances(t *testing.T) {
 	transport := &fakeTransport{fail: true, accepted: false}
-	a := NewAgent("agent", "0.1.0", fakeGatherer{}, transport)
+	a := NewAgent("agent", "0.1.0", fakeGatherer{}, transport, &commandHandlerStub{})
 	if err := a.SendOnce(context.Background()); err == nil {
 		t.Fatal("expected first failure")
 	}
@@ -66,15 +78,15 @@ func TestSequenceRetriesAndDuplicateAcknowledgementAdvances(t *testing.T) {
 }
 
 func TestBootIDChangesForEachProcessInstance(t *testing.T) {
-	a := NewAgent("agent", "0.1.0", fakeGatherer{}, &fakeTransport{})
-	b := NewAgent("agent", "0.1.0", fakeGatherer{}, &fakeTransport{})
+	a := NewAgent("agent", "0.1.0", fakeGatherer{}, &fakeTransport{}, &commandHandlerStub{})
+	b := NewAgent("agent", "0.1.0", fakeGatherer{}, &fakeTransport{}, &commandHandlerStub{})
 	if a.BootID() == b.BootID() || a.BootID() == "" {
 		t.Fatalf("boot IDs = %q %q", a.BootID(), b.BootID())
 	}
 }
 
 func TestCancellationStopsHeartbeatAndLongPollPromptly(t *testing.T) {
-	a := NewAgent("agent", "0.1.0", fakeGatherer{}, &fakeTransport{block: true})
+	a := NewAgent("agent", "0.1.0", fakeGatherer{}, &fakeTransport{block: true}, &commandHandlerStub{})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { _ = a.Run(ctx); close(done) }()
@@ -84,5 +96,32 @@ func TestCancellationStopsHeartbeatAndLongPollPromptly(t *testing.T) {
 	case <-done:
 	case <-time.After(300 * time.Millisecond):
 		t.Fatal("runtime did not stop")
+	}
+}
+
+func TestProcessCommandsOnceStrictlyDecodesBeforeDispatch(t *testing.T) {
+	valid := json.RawMessage(`{"commandId":"11111111-2222-4333-8444-555555555555","type":"SHUTDOWN_SERVER","version":1,"leaseToken":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee","leaseExpiresAt":"2026-08-19T12:05:00Z","payload":{}}`)
+	transport := &fakeTransport{commands: []json.RawMessage{valid}}
+	handler := &commandHandlerStub{}
+	agent := NewAgent("agent", "0.1.0", fakeGatherer{}, transport, handler)
+
+	if err := agent.processCommandsOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(handler.commands) != 1 || handler.commands[0].Type != protocol.ShutdownServer {
+		t.Fatalf("commands = %#v", handler.commands)
+	}
+}
+
+func TestProcessCommandsOnceRejectsInvalidEnvelopeBeforeDispatch(t *testing.T) {
+	invalid := json.RawMessage(`{"commandId":"11111111-2222-4333-8444-555555555555","type":"SHUTDOWN_SERVER","version":1,"leaseToken":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee","leaseExpiresAt":"2026-08-19T12:05:00Z","payload":{},"shell":"poweroff"}`)
+	handler := &commandHandlerStub{}
+	agent := NewAgent("agent", "0.1.0", fakeGatherer{}, &fakeTransport{commands: []json.RawMessage{invalid}}, handler)
+
+	if err := agent.processCommandsOnce(context.Background()); err == nil {
+		t.Fatal("expected invalid command rejection")
+	}
+	if len(handler.commands) != 0 {
+		t.Fatalf("invalid command dispatched: %#v", handler.commands)
 	}
 }

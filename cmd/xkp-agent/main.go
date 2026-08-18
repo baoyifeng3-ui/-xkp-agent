@@ -13,6 +13,7 @@ import (
 	"xkp-agent/internal/collect"
 	"xkp-agent/internal/config"
 	"xkp-agent/internal/identity"
+	"xkp-agent/internal/power"
 	agentruntime "xkp-agent/internal/runtime"
 )
 
@@ -70,7 +71,8 @@ func main() {
 	}
 
 	gatherer := collect.NewMultiCollector(collect.NewSystemCollector(cfg.WorkspacePath), collect.NewNvidiaCollector(), collect.NewDockerCollector())
-	agent := agentruntime.NewAgent(cfg.AgentID, version, gatherer, api)
+	dispatcher := agentruntime.NewCommandDispatcher(api, power.NewController())
+	agent := agentruntime.NewAgent(cfg.AgentID, version, gatherer, api, dispatcher)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := agent.Run(ctx); err != nil {

@@ -26,6 +26,14 @@ type Command struct {
 	Payload        json.RawMessage `json:"payload"`
 }
 
+type CommandResult struct {
+	LeaseToken string                 `json:"leaseToken"`
+	Success    bool                   `json:"success"`
+	Code       string                 `json:"code"`
+	Message    string                 `json:"message,omitempty"`
+	Details    map[string]interface{} `json:"details,omitempty"`
+}
+
 func DecodeCommand(data []byte) (Command, error) {
 	if len(data) == 0 || len(data) > MaxCommandBytes {
 		return Command{}, fmt.Errorf("command envelope size is invalid")

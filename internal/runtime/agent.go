@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"xkp-agent/internal/collect"
+	"xkp-agent/internal/protocol"
 )
 
 type HeartbeatRequest struct {
@@ -34,21 +35,30 @@ type Transport interface {
 	PollCommands(context.Context, int) ([]json.RawMessage, error)
 }
 
+type CommandHandler interface {
+	Dispatch(context.Context, protocol.Command) error
+}
+
 type Agent struct {
 	agentID           string
 	version           string
 	bootID            string
 	gatherer          Gatherer
 	transport         Transport
+	commandHandler    CommandHandler
 	mu                sync.Mutex
 	nextSequence      int64
 	backoff           time.Duration
 	heartbeatInterval time.Duration
 }
 
-func NewAgent(agentID, version string, gatherer Gatherer, transport Transport) *Agent {
+func NewAgent(agentID, version string, gatherer Gatherer, transport Transport,
+	commandHandler CommandHandler) *Agent {
+	if gatherer == nil || transport == nil || commandHandler == nil {
+		panic("agent runtime dependencies are required")
+	}
 	return &Agent{agentID: agentID, version: version, bootID: newBootID(), gatherer: gatherer, transport: transport,
-		nextSequence: 1, backoff: time.Second, heartbeatInterval: 5 * time.Second}
+		commandHandler: commandHandler, nextSequence: 1, backoff: time.Second, heartbeatInterval: 5 * time.Second}
 }
 
 func (a *Agent) BootID() string                { return a.bootID }
@@ -111,11 +121,11 @@ func (a *Agent) heartbeatLoop(ctx context.Context) {
 
 func (a *Agent) commandLoop(ctx context.Context) {
 	for {
-		commands, err := a.transport.PollCommands(ctx, 25)
+		err := a.processCommandsOnce(ctx)
 		if ctx.Err() != nil {
 			return
 		}
-		if err != nil || len(commands) > 0 {
+		if err != nil {
 			timer := time.NewTimer(jitter(time.Second))
 			select {
 			case <-ctx.Done():
@@ -125,6 +135,23 @@ func (a *Agent) commandLoop(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func (a *Agent) processCommandsOnce(ctx context.Context) error {
+	commands, err := a.transport.PollCommands(ctx, 25)
+	if err != nil {
+		return err
+	}
+	for _, raw := range commands {
+		command, decodeErr := protocol.DecodeCommand(raw)
+		if decodeErr != nil {
+			return fmt.Errorf("reject invalid command envelope: %w", decodeErr)
+		}
+		if dispatchErr := a.commandHandler.Dispatch(ctx, command); dispatchErr != nil {
+			return dispatchErr
+		}
+	}
+	return nil
 }
 
 func jitter(delay time.Duration) time.Duration {
