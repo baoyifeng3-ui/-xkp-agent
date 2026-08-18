@@ -22,6 +22,7 @@ func main() {
 	configPath := flag.String("config", "/etc/xkp-agent/config.yaml", "configuration file")
 	tokenFile := flag.String("enrollment-token-file", "", "one-time enrollment token file")
 	displayName := flag.String("display-name", "", "processing server display name")
+	enrollOnly := flag.Bool("enroll-only", false, "enroll and exit without starting the runtime")
 	flag.Parse()
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -63,6 +64,9 @@ func main() {
 		if err != nil {
 			fail("client initialization failed", err)
 		}
+	}
+	if *enrollOnly {
+		return
 	}
 
 	gatherer := collect.NewMultiCollector(collect.NewSystemCollector(cfg.WorkspacePath), collect.NewNvidiaCollector(), collect.NewDockerCollector())
