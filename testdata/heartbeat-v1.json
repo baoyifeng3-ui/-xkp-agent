@@ -1,0 +1,32 @@
+{
+  "agentId": "11111111-1111-1111-1111-111111111111",
+  "bootId": "22222222-2222-4222-8222-222222222222",
+  "sequence": 17,
+  "timestamp": "2026-08-18T13:15:30Z",
+  "agentVersion": "0.1.0",
+  "metrics": {
+    "cpuPercent": 24.5,
+    "ramTotalBytes": 34359738368,
+    "ramUsedBytes": 17179869184,
+    "ramPercent": 50.0,
+    "gpuModel": "NVIDIA GeForce RTX 2080",
+    "gpuPercent": null,
+    "gpuTemperatureCelsius": 62,
+    "gpuMemoryTotalBytes": 8589934592,
+    "gpuMemoryUsedBytes": 2147483648,
+    "gpuMemoryPercent": null,
+    "systemDiskTotalBytes": 536870912000,
+    "systemDiskUsedBytes": 214748364800,
+    "systemDiskPercent": 40.0,
+    "workspaceDiskTotalBytes": 1073741824000,
+    "workspaceDiskUsedBytes": 322122547200,
+    "workspaceDiskPercent": 30.0,
+    "dockerAvailable": true,
+    "dockerVersion": "27.5.1",
+    "runningEnvironmentCount": 2,
+    "runningContainerCount": 4,
+    "collectorErrors": {
+      "gpu": "GPU_METRIC_PARTIAL"
+    }
+  }
+}
