@@ -84,8 +84,9 @@ func main() {
 	executor := containerexecutor.NewDockerExecutor(dockerClient, containerexecutor.Validator{
 		WorkspaceRoot: cfg.EnvironmentWorkspaceRoot,
 	})
-	dispatcher := agentruntime.NewCommandDispatcherWithExecutor(api, power.NewController(), commandStore, executor)
-	agent := agentruntime.NewAgent(cfg.AgentID, version, gatherer, api, dispatcher)
+	grantStore := agentruntime.NewMemoryOperationGrantStore()
+	dispatcher := agentruntime.NewCommandDispatcherWithGrant(api, power.NewController(), commandStore, executor, grantStore)
+	agent := agentruntime.NewAgentWithGrantStore(cfg.AgentID, version, gatherer, api, dispatcher, grantStore)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := agent.Run(ctx); err != nil {

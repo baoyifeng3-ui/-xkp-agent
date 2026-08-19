@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"xkp-agent/internal/container"
 	"xkp-agent/internal/protocol"
@@ -273,6 +274,40 @@ func TestDispatcherRetriesEnvironmentResultWithoutExecutingAgain(t *testing.T) {
 	}
 	if executor.calls != 1 || !reflect.DeepEqual(transport.order, []string{"result"}) {
 		t.Fatalf("calls=%d order=%v", executor.calls, transport.order)
+	}
+}
+
+func TestDispatcherRejectsCreateStartAndRestoreWhenGrantExpired(t *testing.T) {
+	for _, fixture := range []string{"create", "start", "restore"} {
+		t.Run(fixture, func(t *testing.T) {
+			transport := &commandTransportStub{}
+			power := &powerStub{order: &transport.order}
+			executor := &environmentExecutorStub{order: &transport.order}
+			grant := NewMemoryOperationGrantStore()
+			grant.Update(OperationGrant{Allowed: true, ExpiresAt: time.Now().UTC().Add(-time.Second)})
+			dispatcher := NewCommandDispatcherWithGrant(transport, power, &memoryCommandStore{}, executor, grant)
+
+			err := dispatcher.Dispatch(context.Background(), environmentCommand(t, fixture))
+			if err == nil || executor.calls != 0 || transport.lastResult.Code != "ENVIRONMENT_OPERATION_NOT_GRANTED" {
+				t.Fatalf("error=%v calls=%d result=%#v", err, executor.calls, transport.lastResult)
+			}
+		})
+	}
+}
+
+func TestDispatcherAlwaysAllowsStopWhenGrantExpired(t *testing.T) {
+	transport := &commandTransportStub{}
+	power := &powerStub{order: &transport.order}
+	executor := &environmentExecutorStub{order: &transport.order}
+	grant := NewMemoryOperationGrantStore()
+	grant.Update(OperationGrant{Allowed: false, ExpiresAt: time.Now().UTC().Add(-time.Minute)})
+	dispatcher := NewCommandDispatcherWithGrant(transport, power, &memoryCommandStore{}, executor, grant)
+
+	if err := dispatcher.Dispatch(context.Background(), environmentCommand(t, "stop")); err != nil {
+		t.Fatal(err)
+	}
+	if executor.calls != 1 || transport.lastResult.Code != "ENVIRONMENT_STOPPED" {
+		t.Fatalf("calls=%d result=%#v", executor.calls, transport.lastResult)
 	}
 }
 

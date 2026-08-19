@@ -24,6 +24,7 @@ type fakeTransport struct {
 	block     bool
 	commands  []json.RawMessage
 	polls     int
+	grant     OperationGrant
 }
 
 func (f *fakeTransport) Heartbeat(ctx context.Context, request HeartbeatRequest) (HeartbeatAck, error) {
@@ -38,7 +39,38 @@ func (f *fakeTransport) Heartbeat(ctx context.Context, request HeartbeatRequest)
 		f.fail = false
 		return HeartbeatAck{}, errors.New("network")
 	}
-	return HeartbeatAck{Accepted: f.accepted, Sequence: request.Sequence}, nil
+	return HeartbeatAck{Accepted: f.accepted, Sequence: request.Sequence, OperationGrant: f.grant}, nil
+}
+
+func TestHeartbeatRefreshesEnvironmentOperationGrant(t *testing.T) {
+	expiresAt := time.Now().UTC().Add(time.Minute)
+	transport := &fakeTransport{accepted: true, grant: OperationGrant{Allowed: true, ExpiresAt: expiresAt}}
+	store := NewMemoryOperationGrantStore()
+	agent := NewAgentWithGrantStore("agent", "0.1.0", fakeGatherer{}, transport, &commandHandlerStub{}, store)
+
+	if err := agent.SendOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	grant := store.Current()
+	if !grant.Allowed || !grant.ExpiresAt.Equal(expiresAt) {
+		t.Fatalf("grant = %#v", grant)
+	}
+}
+
+func TestFailedHeartbeatDoesNotExtendEnvironmentOperationGrant(t *testing.T) {
+	store := NewMemoryOperationGrantStore()
+	original := OperationGrant{Allowed: true, ExpiresAt: time.Now().UTC().Add(time.Minute)}
+	store.Update(original)
+	agent := NewAgentWithGrantStore("agent", "0.1.0", fakeGatherer{},
+		&fakeTransport{fail: true, grant: OperationGrant{Allowed: true, ExpiresAt: time.Now().UTC().Add(time.Hour)}},
+		&commandHandlerStub{}, store)
+
+	if err := agent.SendOnce(context.Background()); err == nil {
+		t.Fatal("expected heartbeat failure")
+	}
+	if !store.Current().ExpiresAt.Equal(original.ExpiresAt) {
+		t.Fatalf("failed heartbeat changed grant: %#v", store.Current())
+	}
 }
 func (f *fakeTransport) PollCommands(ctx context.Context, _ int) ([]json.RawMessage, error) {
 	f.polls++

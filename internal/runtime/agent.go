@@ -22,9 +22,10 @@ type HeartbeatRequest struct {
 	Metrics      collect.Snapshot `json:"metrics"`
 }
 type HeartbeatAck struct {
-	Accepted   bool  `json:"accepted"`
-	Sequence   int64 `json:"sequence"`
-	ServerTime int64 `json:"serverTime"`
+	Accepted       bool           `json:"accepted"`
+	Sequence       int64          `json:"sequence"`
+	ServerTime     int64          `json:"serverTime"`
+	OperationGrant OperationGrant `json:"operationGrant"`
 }
 
 type Gatherer interface {
@@ -51,15 +52,26 @@ type Agent struct {
 	nextSequence      int64
 	backoff           time.Duration
 	heartbeatInterval time.Duration
+	grantStore        OperationGrantStore
 }
 
 func NewAgent(agentID, version string, gatherer Gatherer, transport Transport,
 	commandHandler CommandHandler) *Agent {
+	return NewAgentWithGrantStore(agentID, version, gatherer, transport, commandHandler,
+		NewMemoryOperationGrantStore())
+}
+
+func NewAgentWithGrantStore(agentID, version string, gatherer Gatherer, transport Transport,
+	commandHandler CommandHandler, grantStore OperationGrantStore) *Agent {
 	if gatherer == nil || transport == nil || commandHandler == nil {
 		panic("agent runtime dependencies are required")
 	}
+	if grantStore == nil {
+		panic("operation grant store is required")
+	}
 	return &Agent{agentID: agentID, version: version, bootID: newBootID(), gatherer: gatherer, transport: transport,
-		commandHandler: commandHandler, nextSequence: 1, backoff: time.Second, heartbeatInterval: 5 * time.Second}
+		commandHandler: commandHandler, nextSequence: 1, backoff: time.Second, heartbeatInterval: 5 * time.Second,
+		grantStore: grantStore}
 }
 
 func (a *Agent) BootID() string                { return a.bootID }
@@ -84,6 +96,7 @@ func (a *Agent) SendOnce(ctx context.Context) error {
 	if ack.Sequence != sequence {
 		return fmt.Errorf("heartbeat acknowledgement sequence mismatch")
 	}
+	a.grantStore.Update(ack.OperationGrant)
 	// accepted=false means the management server already committed this sequence.
 	a.nextSequence = sequence + 1
 	a.backoff = time.Second

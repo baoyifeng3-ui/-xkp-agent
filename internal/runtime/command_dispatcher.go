@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode"
 
 	"xkp-agent/internal/container"
@@ -24,6 +25,7 @@ type CommandDispatcher struct {
 	power     power.Controller
 	store     CommandStore
 	executor  container.Executor
+	grant     OperationGrantStore
 }
 
 func NewCommandDispatcher(transport CommandTransport, powerController power.Controller) *CommandDispatcher {
@@ -48,6 +50,16 @@ func NewCommandDispatcherWithExecutor(transport CommandTransport, powerControlle
 		panic("container executor is required")
 	}
 	dispatcher.executor = executor
+	return dispatcher
+}
+
+func NewCommandDispatcherWithGrant(transport CommandTransport, powerController power.Controller,
+	store CommandStore, executor container.Executor, grant OperationGrantStore) *CommandDispatcher {
+	dispatcher := NewCommandDispatcherWithExecutor(transport, powerController, store, executor)
+	if grant == nil {
+		panic("operation grant store is required")
+	}
+	dispatcher.grant = grant
 	return dispatcher
 }
 
@@ -168,6 +180,12 @@ func (d *CommandDispatcher) dispatchEnvironment(ctx context.Context, command pro
 }
 
 func (d *CommandDispatcher) executeEnvironment(ctx context.Context, command protocol.Command) (protocol.CommandResult, error) {
+	if command.Type != protocol.StopTrainingEnvironment && d.grant != nil &&
+		!d.grant.Current().Valid(time.Now().UTC()) {
+		err := fmt.Errorf("environment operation grant is missing, denied, or expired")
+		return protocol.CommandResult{Success: false, Code: "ENVIRONMENT_OPERATION_NOT_GRANTED",
+			Message: err.Error()}, err
+	}
 	var pair container.PairResult
 	var err error
 	switch command.Type {
