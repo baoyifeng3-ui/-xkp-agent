@@ -25,7 +25,8 @@ const (
 	OpenRootTerminal           CommandType = "OPEN_ROOT_TERMINAL"
 )
 
-var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
+var canonicalUUIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 var canonicalTimePattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$`)
 
 type Command struct {
@@ -106,7 +107,11 @@ func DecodeCommandAt(data []byte, now time.Time, allowInsecureLoopback bool) (Co
 	if err := ensureJSONEnd(decoder); err != nil {
 		return Command{}, err
 	}
-	if !uuidPattern.MatchString(command.CommandID) || !uuidPattern.MatchString(command.LeaseToken) {
+	identifierPattern := uuidPattern
+	if command.Type == OpenRootTerminal {
+		identifierPattern = canonicalUUIDPattern
+	}
+	if !identifierPattern.MatchString(command.CommandID) || !identifierPattern.MatchString(command.LeaseToken) {
 		return Command{}, fmt.Errorf("command identifiers are invalid")
 	}
 	if command.Version != 1 {
@@ -115,12 +120,14 @@ func DecodeCommandAt(data []byte, now time.Time, allowInsecureLoopback bool) (Co
 	if command.LeaseExpiresAt.IsZero() {
 		return Command{}, fmt.Errorf("command lease expiry is required")
 	}
-	var rawEnvelope struct {
-		LeaseExpiresAt json.RawMessage `json:"leaseExpiresAt"`
-	}
-	if err := json.Unmarshal(data, &rawEnvelope); err != nil ||
-		!isCanonicalTime(rawEnvelope.LeaseExpiresAt, command.LeaseExpiresAt) {
-		return Command{}, fmt.Errorf("command lease expiry is invalid")
+	if command.Type == OpenRootTerminal {
+		var rawEnvelope struct {
+			LeaseExpiresAt json.RawMessage `json:"leaseExpiresAt"`
+		}
+		if err := json.Unmarshal(data, &rawEnvelope); err != nil ||
+			!isCanonicalTime(rawEnvelope.LeaseExpiresAt, command.LeaseExpiresAt) {
+			return Command{}, fmt.Errorf("command lease expiry is invalid")
+		}
 	}
 	if command.Type == ShutdownServer {
 		var payload map[string]json.RawMessage
@@ -156,7 +163,7 @@ func DecodeCommandAt(data []byte, now time.Time, allowInsecureLoopback bool) (Co
 }
 
 func validateTerminal(raw json.RawMessage, payload TerminalPayload, now time.Time, allowInsecureLoopback bool) error {
-	if !uuidPattern.MatchString(payload.SessionID) || payload.IdleTimeoutSeconds != 600 {
+	if !canonicalUUIDPattern.MatchString(payload.SessionID) || payload.IdleTimeoutSeconds != 600 {
 		return fmt.Errorf("terminal payload identity or idle timeout is invalid")
 	}
 	var rawTimes struct {

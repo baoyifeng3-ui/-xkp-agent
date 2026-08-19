@@ -29,6 +29,31 @@ func TestDecodeCommandAcceptsSharedShutdownFixture(t *testing.T) {
 	}
 }
 
+func TestDecodeCommandPreservesLegacyIdentifierAndTimestampCompatibility(t *testing.T) {
+	shutdown := []byte(`{"commandId":"11111111-2222-4333-8444-555555555555","type":"SHUTDOWN_SERVER","version":1,"leaseToken":"AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE","leaseExpiresAt":"2026-08-19T12:05:00.123+00:00","payload":{}}`)
+	if _, err := DecodeCommand(shutdown); err != nil {
+		t.Fatalf("legacy shutdown rejected: %v", err)
+	}
+	environment, err := os.ReadFile("../../testdata/command-start-training-environment-v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope map[string]interface{}
+	if err := json.Unmarshal(environment, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	envelope["commandId"] = "11111111-2222-4333-8444-555555555555"
+	envelope["leaseToken"] = "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"
+	envelope["leaseExpiresAt"] = "2026-08-19T12:05:00.123+00:00"
+	mutated, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeCommand(mutated); err != nil {
+		t.Fatalf("legacy environment rejected: %v", err)
+	}
+}
+
 func TestDecodeCommandRejectsUnknownFields(t *testing.T) {
 	_, err := DecodeCommand([]byte(`{"commandId":"11111111-2222-4333-8444-555555555555","type":"SHUTDOWN_SERVER","version":1,"leaseToken":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee","leaseExpiresAt":"2026-08-19T12:05:00Z","payload":{},"shell":"poweroff"}`))
 	if err == nil {
