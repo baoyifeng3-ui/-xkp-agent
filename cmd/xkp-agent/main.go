@@ -10,9 +10,11 @@ import (
 	"strings"
 	"syscall"
 
+	dockerclient "github.com/docker/docker/client"
 	"xkp-agent/internal/client"
 	"xkp-agent/internal/collect"
 	"xkp-agent/internal/config"
+	containerexecutor "xkp-agent/internal/container"
 	"xkp-agent/internal/identity"
 	"xkp-agent/internal/power"
 	agentruntime "xkp-agent/internal/runtime"
@@ -74,7 +76,15 @@ func main() {
 	gatherer := collect.NewMultiCollector(collect.NewSystemCollector(cfg.WorkspacePath), collect.NewNvidiaCollector(), collect.NewDockerCollector())
 	commandStore := agentruntime.NewFileCommandStore(filepath.Join(filepath.Dir(*configPath),
 		"pending-command.json"))
-	dispatcher := agentruntime.NewCommandDispatcherWithStore(api, power.NewController(), commandStore)
+	dockerClient, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
+	if err != nil {
+		fail("Docker client initialization failed", err)
+	}
+	defer dockerClient.Close()
+	executor := containerexecutor.NewDockerExecutor(dockerClient, containerexecutor.Validator{
+		WorkspaceRoot: cfg.EnvironmentWorkspaceRoot,
+	})
+	dispatcher := agentruntime.NewCommandDispatcherWithExecutor(api, power.NewController(), commandStore, executor)
 	agent := agentruntime.NewAgent(cfg.AgentID, version, gatherer, api, dispatcher)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
