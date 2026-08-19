@@ -10,12 +10,13 @@ import (
 )
 
 type Config struct {
-	ManagementURL string `yaml:"managementUrl"`
-	CACertificate string `yaml:"caCertificate"`
-	WorkspacePath string `yaml:"workspacePath"`
-	AgentID       string `yaml:"agentId,omitempty"`
-	Credential    string `yaml:"credential,omitempty"`
-	Development   bool   `yaml:"development,omitempty"`
+	ManagementURL            string `yaml:"managementUrl"`
+	CACertificate            string `yaml:"caCertificate"`
+	WorkspacePath            string `yaml:"workspacePath"`
+	EnvironmentWorkspaceRoot string `yaml:"environmentWorkspaceRoot,omitempty"`
+	AgentID                  string `yaml:"agentId,omitempty"`
+	Credential               string `yaml:"credential,omitempty"`
+	Development              bool   `yaml:"development,omitempty"`
 }
 
 func Load(path string) (Config, error) {
@@ -32,6 +33,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.CACertificate != "" && !filepath.IsAbs(cfg.CACertificate) {
 		cfg.CACertificate = filepath.Join(filepath.Dir(path), cfg.CACertificate)
+	}
+	if cfg.EnvironmentWorkspaceRoot == "" {
+		cfg.EnvironmentWorkspaceRoot = filepath.Join(cfg.WorkspacePath, "environments")
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -61,6 +65,9 @@ func (c Config) Validate() error {
 	}
 	if !filepath.IsAbs(c.WorkspacePath) {
 		return fmt.Errorf("workspace path must be absolute")
+	}
+	if !filepath.IsAbs(c.EnvironmentWorkspaceRoot) {
+		return fmt.Errorf("environment workspace root must be absolute")
 	}
 	if !c.Development {
 		if c.CACertificate == "" {

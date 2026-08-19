@@ -36,3 +36,33 @@ func TestSaveWritesCredentialFileWithOwnerOnlyPermissions(t *testing.T) {
 		t.Fatalf("permission = %o", info.Mode().Perm())
 	}
 }
+
+func TestLoadDefaultsEnvironmentWorkspaceBelowAgentWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "managementUrl: http://127.0.0.1:19443\nworkspacePath: " + filepath.ToSlash(dir) + "\ndevelopment: true\n"
+	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(dir, "environments")
+	if cfg.EnvironmentWorkspaceRoot != want {
+		t.Fatalf("environment workspace = %q, want %q", cfg.EnvironmentWorkspaceRoot, want)
+	}
+}
+
+func TestLoadRejectsRelativeEnvironmentWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := "managementUrl: http://127.0.0.1:19443\nworkspacePath: " + filepath.ToSlash(dir) +
+		"\nenvironmentWorkspaceRoot: relative/path\ndevelopment: true\n"
+	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("relative environment workspace was accepted")
+	}
+}
