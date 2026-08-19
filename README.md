@@ -35,6 +35,13 @@ Windows is supported for development builds only. Production requires Ubuntu
 22.04 amd64, systemd, Docker Engine, the NVIDIA driver/NVML for GPU metrics, and a
 workspace directory on the intended data filesystem.
 
+The installer now fails closed unless Docker exposes both `sysbox-runc` and
+`nvidia` runtimes and `nvidia-smi` can access the GPU. Training environments are
+stored below `<workspace>/environments`; each assigned environment receives one
+host directory mounted into both the annotation container at `/root/data` and
+the editor container at `/home/student/data`. Restoring containers preserves
+that host directory.
+
 ## Enrollment and identity
 
 The management URL must use the management server's fixed LAN IP and port 19443.
@@ -64,13 +71,15 @@ Docker daemon, or workspace mount is reported as a stable collector error while
 available metrics continue to flow. Network failures use capped retry with jitter;
 the credential remains local and reconnect is automatic.
 
-The Agent polls the authenticated command endpoint and accepts only the version-one
-`SHUTDOWN_SERVER` command. It acknowledges the lease before calling the fixed
+The Agent polls the authenticated command endpoint and accepts only the closed
+version-one command set for shutdown and paired training-environment lifecycle.
+It acknowledges the lease before calling the fixed
 `/usr/bin/loginctl poweroff` executable directly; command payloads can never select
 a program or arguments. The installer adds a narrowly scoped polkit rule that
 allows only the `xkp-agent` service account and only the two systemd-logind power-off
-actions. Container commands and arbitrary shell execution are not supported. Do
-not expose the Docker socket over TCP as a workaround.
+actions. Environment payloads are typed and allow only the approved runtimes,
+mount targets, ports and resource bounds; arbitrary shell execution is not
+supported. Do not expose the Docker socket over TCP as a workaround.
 
 Before power-off, the Agent persists the leased command in
 `/etc/xkp-agent/pending-command.json` with mode `0600`. A bounded result is saved

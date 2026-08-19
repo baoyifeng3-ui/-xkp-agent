@@ -27,6 +27,13 @@ source /etc/os-release
 [[ -n "$registration_token" && -n "$display_name" ]] || die 'Registration token and display name are required'
 [[ "$management_url$display_name$workspace" != *$'\n'* ]] || die 'Arguments must not contain newlines'
 getent group docker >/dev/null || die 'Docker group does not exist; install Docker first'
+command -v docker >/dev/null || die 'Docker CLI is required'
+docker info >/dev/null 2>&1 || die 'Docker daemon is unavailable'
+docker_runtimes=$(docker info --format '{{json .Runtimes}}')
+[[ "$docker_runtimes" == *'sysbox-runc'* ]] || die 'Docker runtime sysbox-runc is required'
+[[ "$docker_runtimes" == *'nvidia'* ]] || die 'NVIDIA Container Runtime is required'
+command -v nvidia-smi >/dev/null || die 'NVIDIA driver tools are required'
+nvidia-smi >/dev/null 2>&1 || die 'NVIDIA GPU is unavailable'
 command -v loginctl >/dev/null || die 'loginctl is required for power control'
 [[ -d /etc/polkit-1/rules.d ]] || die 'polkit rules directory is missing; install polkit first'
 
@@ -34,6 +41,8 @@ id xkp-agent >/dev/null 2>&1 || useradd --system --home-dir /nonexistent --shell
 for group_name in docker video render; do getent group "$group_name" >/dev/null && usermod -aG "$group_name" xkp-agent; done
 install -d -m 0700 -o xkp-agent -g xkp-agent /etc/xkp-agent
 install -d -m 0750 -o xkp-agent -g xkp-agent "$workspace"
+environment_workspace=$workspace/environments
+install -d -m 0750 -o xkp-agent -g xkp-agent "$environment_workspace"
 install -m 0755 "$binary" /usr/local/bin/xkp-agent
 install -m 0644 "$ca_file" /etc/xkp-agent/ca.crt
 install -m 0644 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/xkp-agent-power.rules" \
@@ -45,6 +54,7 @@ yaml_escape() { local value=${1//\\/\\\\}; value=${value//\"/\\\"}; printf '%s' 
   printf 'managementUrl: "%s"\n' "$(yaml_escape "$management_url")"
   printf 'caCertificate: "/etc/xkp-agent/ca.crt"\n'
   printf 'workspacePath: "%s"\n' "$(yaml_escape "$workspace")"
+  printf 'environmentWorkspaceRoot: "%s"\n' "$(yaml_escape "$environment_workspace")"
 } > /etc/xkp-agent/agent.yml
 chown xkp-agent:xkp-agent /etc/xkp-agent/agent.yml
 chmod 0600 /etc/xkp-agent/agent.yml
