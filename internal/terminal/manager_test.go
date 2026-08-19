@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -298,6 +299,30 @@ func TestManagerRejectsExpiredDirectCommand(t *testing.T) {
 	}
 }
 
+func TestManagerRechecksExpiryAfterWaitingForRecoveryLock(t *testing.T) {
+	manager, _ := NewManager(&memoryRecoveryStore{}, &runnerStub{err: errors.New("must not launch")}, &reporterStub{})
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	manager.now = func() time.Time {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-release
+			return time.Now().UTC().Add(time.Hour)
+		}
+		return time.Now().UTC().Add(-time.Hour)
+	}
+	result := make(chan error, 1)
+	go func() { result <- manager.Start(context.Background(), terminalCommand()) }()
+	<-entered
+	close(release)
+	err := <-result
+	var terminalErr *Error
+	if !errors.As(err, &terminalErr) || terminalErr.Code != "TERMINAL_COMMAND_EXPIRED" {
+		t.Fatalf("expiry error = %#v", err)
+	}
+}
+
 func terminalCommand() protocol.Command {
 	return terminalCommandWithIDs("77777777-7777-4777-8777-777777777777", "44444444-4444-4444-8444-444444444444")
 }
@@ -305,7 +330,7 @@ func terminalCommand() protocol.Command {
 func terminalCommandWithIDs(commandID, sessionID string) protocol.Command {
 	now := time.Now().UTC().Truncate(time.Second)
 	return protocol.Command{CommandID: commandID, Type: protocol.OpenRootTerminal, Version: 1,
-		LeaseToken: "66666666-6666-4666-8666-666666666666", Terminal: &protocol.TerminalPayload{
+		LeaseToken: "66666666-6666-4666-8666-666666666666", LeaseExpiresAt: time.Now().UTC().Add(time.Hour), Terminal: &protocol.TerminalPayload{
 			SessionID: sessionID, RelayURL: "wss://management.example/terminal/v1/agent/" + sessionID,
 			AgentConnectionDeadline: now.Add(time.Minute),
 			IdleTimeoutSeconds:      600, AbsoluteExpiresAt: now.Add(2 * time.Hour)}}

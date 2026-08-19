@@ -174,6 +174,21 @@ func TestFileRecoveryStoreClearRejectsInsecureParent(t *testing.T) {
 	}
 }
 
+func TestFileRecoveryStoreClearReportsDirectorySyncFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	store := NewFileRecoveryStore(path).(*FileRecoveryStore)
+	if err := store.Save(validRecovery()); err != nil {
+		t.Fatal(err)
+	}
+	store.syncDir = func(string) error { return os.ErrPermission }
+	if err := store.Clear(); err == nil {
+		t.Fatal("ignored directory sync failure")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("state still exists after clear: %v", err)
+	}
+}
+
 func TestFileRecoveryStoreSaveUsesDeterministicCanonicalFieldOrder(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	if err := NewFileRecoveryStore(path).Save(validRecovery()); err != nil {

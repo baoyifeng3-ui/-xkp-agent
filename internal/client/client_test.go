@@ -16,6 +16,7 @@ import (
 	"xkp-agent/internal/config"
 	"xkp-agent/internal/identity"
 	"xkp-agent/internal/protocol"
+	"xkp-agent/internal/runtime"
 )
 
 func TestEnrollmentUsesConfiguredCAAndRequiresCompleteResponse(t *testing.T) {
@@ -147,6 +148,64 @@ func TestExchangeTerminalTicketRejectsRedirectResponse(t *testing.T) {
 	}
 }
 
+func TestClientMethodsRejectRedirectsWithoutFollowingOrForwardingCredentials(t *testing.T) {
+	finalHits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/final" {
+			finalHits++
+		}
+		http.Redirect(w, r, "/final", http.StatusFound)
+	}))
+	defer server.Close()
+	c := testClientWithClock(t, server.URL, time.Now)
+	info := identity.Info{Hostname: "host", MachineDigest: strings.Repeat("a", 64)}
+	checks := []func() error{
+		func() error { _, err := c.Enroll(context.Background(), "registration-secret", info); return err },
+		func() error { _, err := c.Heartbeat(context.Background(), runtime.HeartbeatRequest{}); return err },
+		func() error { _, err := c.PollCommands(context.Background(), 0); return err },
+		func() error {
+			return c.StartCommand(context.Background(), "77777777-7777-4777-8777-777777777777", "66666666-6666-4666-8666-666666666666")
+		},
+		func() error {
+			return c.FinishCommand(context.Background(), "77777777-7777-4777-8777-777777777777", protocol.CommandResult{LeaseToken: "66666666-6666-4666-8666-666666666666"})
+		},
+		func() error {
+			_, err := c.ExchangeTerminalTicket(context.Background(), "44444444-4444-4444-8444-444444444444", "77777777-7777-4777-8777-777777777777", "66666666-6666-4666-8666-666666666666")
+			return err
+		},
+	}
+	for i, check := range checks {
+		if err := check(); err == nil {
+			t.Fatalf("method %d accepted redirect", i)
+		}
+	}
+	if finalHits != 0 {
+		t.Fatalf("redirect target hits = %d", finalHits)
+	}
+}
+
+func TestCommandClientRejectsPathInjectionIdentifiersBeforeRequest(t *testing.T) {
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits++ }))
+	defer server.Close()
+	c := testClientWithClock(t, server.URL, time.Now)
+	validLease := "66666666-6666-4666-8666-666666666666"
+	for _, commandID := range []string{"../secret", "77777777-7777-4777-8777-777777777777?x=1", "UPPER"} {
+		if err := c.StartCommand(context.Background(), commandID, validLease); err == nil {
+			t.Fatalf("accepted command id %q", commandID)
+		}
+		if err := c.FinishCommand(context.Background(), commandID, protocol.CommandResult{LeaseToken: validLease}); err == nil {
+			t.Fatalf("accepted finish command id %q", commandID)
+		}
+	}
+	if err := c.StartCommand(context.Background(), "77777777-7777-4777-8777-777777777777", "lease"); err == nil {
+		t.Fatal("accepted invalid lease token")
+	}
+	if hits != 0 {
+		t.Fatalf("request hits = %d", hits)
+	}
+}
+
 func testClientWithClock(t *testing.T, baseURL string, now func() time.Time) *Client {
 	t.Helper()
 	c, err := New(config.Config{ManagementURL: baseURL, AgentID: "agent-id", Credential: "agent-secret", Development: true})
@@ -217,7 +276,7 @@ func TestCommandAcknowledgementRejectsNonSuccessWithoutLeakingBody(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = c.StartCommand(context.Background(), "command-id", "lease-secret")
+	err = c.StartCommand(context.Background(), "77777777-7777-4777-8777-777777777777", "66666666-6666-4666-8666-666666666666")
 	if err == nil || !strings.Contains(err.Error(), "409") {
 		t.Fatalf("error = %v", err)
 	}

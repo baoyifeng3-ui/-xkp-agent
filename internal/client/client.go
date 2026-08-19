@@ -55,7 +55,8 @@ func New(cfg config.Config) (*Client, error) {
 		transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}
 	}
 	return &Client{baseURL: strings.TrimRight(cfg.ManagementURL, "/"), agentID: cfg.AgentID,
-		credential: cfg.Credential, http: &http.Client{Transport: transport, Timeout: 35 * time.Second},
+		credential: cfg.Credential, http: &http.Client{Transport: transport, Timeout: 35 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		now: func() time.Time { return time.Now().UTC() }}, nil
 }
 
@@ -82,9 +83,7 @@ func (c *Client) ExchangeTerminalTicket(ctx context.Context, sessionID, commandI
 	}
 	req.Header.Set("Authorization", "Bearer "+c.credential)
 	req.Header.Set("Content-Type", "application/json")
-	requestClient := *c.http
-	requestClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	resp, err := requestClient.Do(req)
+	resp, err := c.http.Do(req)
 	if err != nil {
 		return TerminalTicket{}, fmt.Errorf("terminal ticket request failed")
 	}
@@ -240,6 +239,9 @@ func (c *Client) PollCommands(ctx context.Context, waitSeconds int) ([]json.RawM
 }
 
 func (c *Client) StartCommand(ctx context.Context, commandID, leaseToken string) error {
+	if !canonicalTerminalUUID.MatchString(commandID) || !canonicalTerminalUUID.MatchString(leaseToken) {
+		return fmt.Errorf("command identifiers are invalid")
+	}
 	payload := struct {
 		LeaseToken string `json:"leaseToken"`
 	}{LeaseToken: leaseToken}
@@ -259,6 +261,9 @@ func (c *Client) StartCommand(ctx context.Context, commandID, leaseToken string)
 }
 
 func (c *Client) FinishCommand(ctx context.Context, commandID string, result protocol.CommandResult) error {
+	if !canonicalTerminalUUID.MatchString(commandID) || !canonicalTerminalUUID.MatchString(result.LeaseToken) {
+		return fmt.Errorf("command identifiers are invalid")
+	}
 	var response map[string]interface{}
 	path := "/agent/v1/commands/" + commandID + "/result"
 	return c.authenticatedJSON(ctx, http.MethodPost, path, result, &response)

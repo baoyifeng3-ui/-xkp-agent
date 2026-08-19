@@ -31,15 +31,16 @@ type RecoveryStore interface {
 }
 
 type FileRecoveryStore struct {
-	path   string
-	rename func(string, string) error
+	path    string
+	rename  func(string, string) error
+	syncDir func(string) error
 }
 
 func NewFileRecoveryStore(path string) RecoveryStore {
 	if path == "" || !filepath.IsAbs(path) {
 		panic("terminal recovery path must be absolute")
 	}
-	return &FileRecoveryStore{path: filepath.Clean(path), rename: os.Rename}
+	return &FileRecoveryStore{path: filepath.Clean(path), rename: os.Rename, syncDir: syncDirectory}
 }
 
 func (s *FileRecoveryStore) Load() (*TerminalRecovery, error) {
@@ -173,7 +174,23 @@ func (s *FileRecoveryStore) Clear() error {
 	if err := os.Remove(s.path); err != nil {
 		return fmt.Errorf("clear terminal recovery: %w", err)
 	}
+	syncDir := s.syncDir
+	if syncDir == nil {
+		syncDir = syncDirectory
+	}
+	if err := syncDir(filepath.Dir(s.path)); err != nil {
+		return fmt.Errorf("sync terminal recovery directory: %w", err)
+	}
 	return nil
+}
+
+func syncDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }
 
 func rejectSymlinkedParents(path string) error {

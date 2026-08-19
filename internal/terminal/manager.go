@@ -68,15 +68,15 @@ func (m *Manager) Start(_ context.Context, command protocol.Command) error {
 	if err := validateRecovery(recovery); err != nil {
 		return &Error{Code: "TERMINAL_COMMAND_INVALID"}
 	}
+	m.recoveryMu.Lock()
+	defer m.recoveryMu.Unlock()
 	now := time.Now().UTC()
 	if m.now != nil {
 		now = m.now().UTC()
 	}
-	if !recovery.AgentConnectionDeadline.After(now) || !recovery.AbsoluteExpiresAt.After(now) {
+	if !command.LeaseExpiresAt.After(now) || !recovery.AgentConnectionDeadline.After(now) || !recovery.AbsoluteExpiresAt.After(now) {
 		return &Error{Code: "TERMINAL_COMMAND_EXPIRED"}
 	}
-	m.recoveryMu.Lock()
-	defer m.recoveryMu.Unlock()
 
 	m.mu.Lock()
 	if m.active {
@@ -86,6 +86,14 @@ func (m *Manager) Start(_ context.Context, command protocol.Command) error {
 	if m.recoveryPending {
 		m.mu.Unlock()
 		return &Error{Code: "TERMINAL_RECOVERY_PENDING"}
+	}
+	latest := time.Now().UTC()
+	if m.now != nil {
+		latest = m.now().UTC()
+	}
+	if !command.LeaseExpiresAt.After(latest) || !recovery.AgentConnectionDeadline.After(latest) || !recovery.AbsoluteExpiresAt.After(latest) {
+		m.mu.Unlock()
+		return &Error{Code: "TERMINAL_COMMAND_EXPIRED"}
 	}
 	sessionCtx, cancel := context.WithDeadline(context.Background(), recovery.AbsoluteExpiresAt)
 	done := make(chan struct{})
