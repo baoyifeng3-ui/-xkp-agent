@@ -45,6 +45,9 @@ func TestDecodeCommandPreservesLegacyIdentifierAndTimestampCompatibility(t *test
 	envelope["commandId"] = "11111111-2222-4333-8444-555555555555"
 	envelope["leaseToken"] = "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"
 	envelope["leaseExpiresAt"] = "2026-08-19T12:05:00.123+00:00"
+	payload := envelope["payload"].(map[string]interface{})
+	payload["environmentId"] = "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"
+	payload["operationId"] = "BBBBBBBB-CCCC-4DDD-8EEE-FFFFFFFFFFFF"
 	mutated, err := json.Marshal(envelope)
 	if err != nil {
 		t.Fatal(err)
