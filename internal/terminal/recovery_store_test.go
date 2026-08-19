@@ -156,6 +156,39 @@ func TestFileRecoveryStoreAtomicReplaceFailurePreservesPreviousState(t *testing.
 	}
 }
 
+func TestFileRecoveryStoreClearRejectsInsecureParent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	store := NewFileRecoveryStore(path)
+	if err := store.Save(validRecovery()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Clear(); err == nil {
+		t.Fatal("cleared recovery through insecure parent")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("recovery removed: %v", err)
+	}
+}
+
+func TestFileRecoveryStoreSaveUsesDeterministicCanonicalFieldOrder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := NewFileRecoveryStore(path).Save(validRecovery()); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"sessionId":"44444444-4444-4444-8444-444444444444","commandId":"77777777-7777-4777-8777-777777777777","leaseToken":"66666666-6666-4666-8666-666666666666","agentConnectionDeadline":"2026-08-20T10:01:30Z","absoluteExpiresAt":"2026-08-20T12:00:00Z"}`
+	if string(data) != want {
+		t.Fatalf("serialized recovery = %s, want %s", data, want)
+	}
+}
+
 func TestNewFileRecoveryStoreRequiresAbsolutePath(t *testing.T) {
 	defer func() {
 		if recover() == nil {

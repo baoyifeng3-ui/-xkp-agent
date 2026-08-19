@@ -157,6 +157,9 @@ func (s *FileRecoveryStore) Clear() error {
 	if err := rejectSymlinkedParents(s.path); err != nil {
 		return err
 	}
+	if parent, err := os.Stat(filepath.Dir(s.path)); err != nil || parent.Mode().Perm() != 0700 {
+		return fmt.Errorf("terminal recovery directory is unsafe")
+	}
 	info, err := os.Lstat(s.path)
 	if os.IsNotExist(err) {
 		return nil

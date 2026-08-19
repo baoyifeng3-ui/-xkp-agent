@@ -34,6 +34,7 @@ type Manager struct {
 	runner          Runner
 	reporter        Reporter
 	retryDelay      time.Duration
+	now             func() time.Time
 	active          bool
 	recoveryPending bool
 	cancel          context.CancelFunc
@@ -50,6 +51,7 @@ func NewManager(store RecoveryStore, runner Runner, reporter Reporter) (*Manager
 	}
 	return &Manager{
 		store: store, runner: runner, reporter: reporter, retryDelay: 100 * time.Millisecond,
+		now:             time.Now,
 		recoveryPending: recovery != nil,
 	}, nil
 }
@@ -65,6 +67,13 @@ func (m *Manager) Start(_ context.Context, command protocol.Command) error {
 	}
 	if err := validateRecovery(recovery); err != nil {
 		return &Error{Code: "TERMINAL_COMMAND_INVALID"}
+	}
+	now := time.Now().UTC()
+	if m.now != nil {
+		now = m.now().UTC()
+	}
+	if !recovery.AgentConnectionDeadline.After(now) || !recovery.AbsoluteExpiresAt.After(now) {
+		return &Error{Code: "TERMINAL_COMMAND_EXPIRED"}
 	}
 	m.recoveryMu.Lock()
 	defer m.recoveryMu.Unlock()
