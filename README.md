@@ -72,12 +72,13 @@ available metrics continue to flow. Network failures use capped retry with jitte
 the credential remains local and reconnect is automatic.
 
 The Agent polls the authenticated command endpoint and accepts only the closed
-version-one command set for shutdown and paired training-environment lifecycle.
+version-one command set for shutdown, paired training-environment lifecycle, and
+the time-bounded root maintenance terminal.
 It acknowledges the lease before calling the fixed
 `/usr/bin/loginctl poweroff` executable directly; command payloads can never select
-a program or arguments. The installer adds a narrowly scoped polkit rule that
-allows only the `xkp-agent` service account and only the two systemd-logind power-off
-actions. Environment payloads are typed and allow only the approved runtimes,
+a program or arguments. The enrollment helper uses the locked `xkp-agent` account,
+while the installed service runs as root for the maintenance PTY. Environment
+payloads are typed and allow only the approved runtimes,
 mount targets, ports and resource bounds; arbitrary shell execution is not
 supported. Do not expose the Docker socket over TCP as a workaround.
 
@@ -89,9 +90,41 @@ long polling and never executes the same power command twice. If the process end
 between accepting the command and saving its outcome, it reports
 `EXECUTION_OUTCOME_UNKNOWN` for management-side reconciliation.
 
-Before production acceptance, verify that the systemd service account can execute
-`loginctl poweroff` through the installed policy and perform a real shutdown test on the Ubuntu processing
+Before production acceptance, verify that the root systemd service can execute
+`loginctl poweroff` and perform a real shutdown test on the Ubuntu processing
 server. Windows builds remain development-only and fail closed for power control.
+
+## Root terminal prerequisites
+
+The maintenance terminal is available only to a platform super-administrator and
+is intentionally a real root session. The production systemd unit therefore runs
+the Agent as `User=root`; changing it back to an unprivileged identity makes the
+terminal contract false and is not supported. `/bin/bash`, `/dev/ptmx`, and a
+normal Linux PTY filesystem must be present. The Agent always starts the fixed
+`/bin/bash --noprofile --norc` target and never accepts an executable, arguments,
+environment, or shell text from the platform command.
+
+The management endpoint and terminal relay must use HTTPS/WSS with a certificate
+validated by `caCertificate`. A reverse proxy must preserve HTTP/1.1 WebSocket
+`Upgrade` and `Connection` headers and the two requested subprotocol values. Do
+not log authorization or `Sec-WebSocket-Protocol` headers. The browser Origin is
+checked by the management server; configure its exact external HTTPS origin, not
+a wildcard. `deploy/agent.yml.example` shows the production configuration shape.
+
+The processing host needs only outbound TCP access to the management HTTPS/WSS
+endpoint. Deny unsolicited inbound management traffic to the Agent, and do not
+open an Agent port or Docker TCP socket. A terminal has a 10-minute no-I/O timeout,
+a two-hour absolute maximum, and a single-session-per-Agent limit. Tickets are
+one-use, a disconnected session cannot be reattached, and reconnecting the Agent
+does not recreate the root process.
+
+CI and the fake-relay acceptance flow use a non-privileged deterministic echo
+adapter. Before enabling the feature in production, use an isolated, non-shared
+Ubuntu acceptance host: remove workload secrets, restrict its network, open one
+terminal as a super-administrator, confirm `id -u` returns `0`, verify resize and
+binary input, disconnect the browser, and confirm the shell process group is gone.
+Then verify idle and operator closure release the one-session lock. Do not perform
+this real-root acceptance on a classroom or production workload host.
 
 Uninstall while retaining identity:
 

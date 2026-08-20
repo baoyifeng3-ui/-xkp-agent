@@ -7,7 +7,10 @@ config=/etc/xkp-agent/agent.yml
 grep -q '^agentId:' "$config" || { printf 'Agent has not enrolled\n' >&2; exit 1; }
 grep -q '^credential:' "$config" || { printf 'Agent credential missing\n' >&2; exit 1; }
 grep -q '^environmentWorkspaceRoot:' "$config" || { printf 'Environment workspace root missing\n' >&2; exit 1; }
-runuser -u xkp-agent -- docker info >/dev/null 2>&1 || { printf 'Agent cannot access Docker daemon\n' >&2; exit 1; }
+[[ -x /bin/bash ]] || { printf 'Fixed terminal shell /bin/bash is unavailable\n' >&2; exit 1; }
+[[ -c /dev/ptmx ]] || { printf 'PTY multiplexer /dev/ptmx is unavailable\n' >&2; exit 1; }
+[[ $(systemctl show xkp-agent.service -p User --value) == root ]] || { printf 'Agent systemd service must use User=root\n' >&2; exit 1; }
+docker info >/dev/null 2>&1 || { printf 'Agent cannot access Docker daemon\n' >&2; exit 1; }
 docker_runtimes=$(docker info --format '{{json .Runtimes}}')
 [[ "$docker_runtimes" == *'sysbox-runc'* ]] || { printf 'sysbox-runc is unavailable\n' >&2; exit 1; }
 [[ "$docker_runtimes" == *'nvidia'* ]] || { printf 'NVIDIA Container Runtime is unavailable\n' >&2; exit 1; }

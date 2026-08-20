@@ -1,0 +1,7 @@
+managementUrl: "https://192.0.2.10:19443"
+caCertificate: "/etc/xkp-agent/ca.crt"
+workspacePath: "/srv/xkp"
+environmentWorkspaceRoot: "/srv/xkp/environments"
+development: false
+
+# Enrollment writes agentId and credential to the installed 0600 file.

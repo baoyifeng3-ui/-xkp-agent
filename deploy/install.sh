@@ -67,6 +67,9 @@ unset registration_token
 runuser -u xkp-agent -- /usr/local/bin/xkp-agent --config /etc/xkp-agent/agent.yml \
   --enrollment-token-file "$token_file" --display-name "$display_name" --enroll-only
 [[ ! -e "$token_file" ]] || die 'Enrollment token was not removed'
+chown root:root /etc/xkp-agent /etc/xkp-agent/agent.yml
+chmod 0700 /etc/xkp-agent
+chmod 0600 /etc/xkp-agent/agent.yml
 
 service_template="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/xkp-agent.service"
 service_temp=$(mktemp)
