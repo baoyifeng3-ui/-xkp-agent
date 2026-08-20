@@ -26,6 +26,7 @@ type Reporter interface {
 
 type StartFailureRecorder interface {
 	RecordStartFailure(context.Context, protocol.Command, string, string) error
+	ClearStartFailure() error
 }
 
 type Error struct{ Code string }
@@ -145,6 +146,16 @@ func (m *Manager) RecordStartFailure(_ context.Context, command protocol.Command
 	}
 	m.mu.Lock()
 	m.recoveryPending = true
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *Manager) ClearStartFailure() error {
+	if err := m.store.Clear(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.recoveryPending = false
 	m.mu.Unlock()
 	return nil
 }

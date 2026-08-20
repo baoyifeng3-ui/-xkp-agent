@@ -27,6 +27,17 @@ type terminalManagerStub struct {
 	active bool
 }
 
+type startFailureRecorderStub struct {
+	terminalManagerStub
+	recorded, cleared bool
+}
+
+func (m *startFailureRecorderStub) RecordStartFailure(context.Context, protocol.Command, string, string) error {
+	m.recorded = true
+	return nil
+}
+func (m *startFailureRecorderStub) ClearStartFailure() error { m.cleared = true; return nil }
+
 func (m *terminalManagerStub) Start(context.Context, protocol.Command) error {
 	*m.order = append(*m.order, "terminal-start")
 	if m.err == nil {
@@ -104,6 +115,38 @@ func TestDispatcherReportsUnsupportedTerminalPlatform(t *testing.T) {
 	_ = dispatcher.Dispatch(context.Background(), terminalRuntimeCommand())
 	if transport.lastResult.Code != "TERMINAL_UNSUPPORTED_PLATFORM" {
 		t.Fatalf("result = %#v", transport.lastResult)
+	}
+}
+
+func TestDispatcherDoesNotPersistConflictFailures(t *testing.T) {
+	transport := &commandTransportStub{}
+	manager := &startFailureRecorderStub{terminalManagerStub: terminalManagerStub{order: &transport.order, err: &terminalpkg.Error{Code: "TERMINAL_ALREADY_ACTIVE"}}}
+	d := NewCommandDispatcherWithTerminal(transport, &powerStub{order: &transport.order}, &panicCommandStore{}, manager)
+	_ = d.Dispatch(context.Background(), terminalRuntimeCommand())
+	if manager.recorded {
+		t.Fatal("conflict failure overwrote recovery")
+	}
+}
+
+func TestDispatcherClearsPersistedStartFailureAfterSuccessfulReport(t *testing.T) {
+	transport := &commandTransportStub{}
+	manager := &startFailureRecorderStub{terminalManagerStub: terminalManagerStub{order: &transport.order, err: &terminalpkg.Error{Code: "TERMINAL_START_FAILED"}}}
+	d := NewCommandDispatcherWithTerminal(transport, &powerStub{order: &transport.order}, &panicCommandStore{}, manager)
+	_ = d.Dispatch(context.Background(), terminalRuntimeCommand())
+	if !manager.recorded || !manager.cleared {
+		t.Fatalf("recorded=%v cleared=%v", manager.recorded, manager.cleared)
+	}
+}
+
+func TestDispatcherRetainsPersistedStartFailureWhenReportFails(t *testing.T) {
+	transport := &commandTransportStub{finishErr: errors.New("network")}
+	manager := &startFailureRecorderStub{terminalManagerStub: terminalManagerStub{order: &transport.order, err: &terminalpkg.Error{Code: "TERMINAL_START_FAILED"}}}
+	d := NewCommandDispatcherWithTerminal(transport, &powerStub{order: &transport.order}, &panicCommandStore{}, manager)
+	if err := d.Dispatch(context.Background(), terminalRuntimeCommand()); err == nil {
+		t.Fatal("expected report error")
+	}
+	if !manager.recorded || manager.cleared {
+		t.Fatalf("recorded=%v cleared=%v", manager.recorded, manager.cleared)
 	}
 }
 
