@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -24,7 +25,26 @@ type Client struct {
 	agentID    string
 	credential string
 	http       *http.Client
+	now        func() time.Time
 }
+
+type TerminalTicket = protocol.TerminalTicket
+
+// Credential returns the enrolled bearer credential for authenticated websocket handshakes.
+func (c *Client) Credential() string { return c.credential }
+
+// TLSConfig returns a clone of the HTTP transport TLS settings.
+func (c *Client) TLSConfig() *tls.Config {
+	if transport, ok := c.http.Transport.(*http.Transport); ok && transport.TLSClientConfig != nil {
+		return transport.TLSClientConfig.Clone()
+	}
+	return &tls.Config{MinVersion: tls.VersionTLS12}
+}
+
+var canonicalTerminalUUID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+var genericCommandUUID = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[1-5][0-9A-Fa-f]{3}-[89A-Fa-f][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}$`)
+var terminalTicketPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+
 type Enrollment struct {
 	AgentID    string `json:"agentId"`
 	Credential string `json:"credential"`
@@ -44,7 +64,123 @@ func New(cfg config.Config) (*Client, error) {
 		transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}
 	}
 	return &Client{baseURL: strings.TrimRight(cfg.ManagementURL, "/"), agentID: cfg.AgentID,
-		credential: cfg.Credential, http: &http.Client{Transport: transport, Timeout: 35 * time.Second}}, nil
+		credential: cfg.Credential, http: &http.Client{Transport: transport, Timeout: 35 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+		now: func() time.Time { return time.Now().UTC() }}, nil
+}
+
+func (c *Client) ExchangeTerminalTicket(ctx context.Context, sessionID, commandID, leaseToken string) (TerminalTicket, error) {
+	if !canonicalTerminalUUID.MatchString(sessionID) || !canonicalTerminalUUID.MatchString(commandID) ||
+		!canonicalTerminalUUID.MatchString(leaseToken) {
+		return TerminalTicket{}, fmt.Errorf("terminal ticket identifiers are invalid")
+	}
+	payload := struct {
+		CommandID  string `json:"commandId"`
+		LeaseToken string `json:"leaseToken"`
+	}{CommandID: commandID, LeaseToken: leaseToken}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return TerminalTicket{}, fmt.Errorf("encode terminal ticket request")
+	}
+	path := "/agent/v1/terminal-sessions/" + sessionID + "/agent-ticket"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return TerminalTicket{}, fmt.Errorf("create terminal ticket request")
+	}
+	if c.agentID == "" || c.credential == "" {
+		return TerminalTicket{}, fmt.Errorf("agent is not enrolled")
+	}
+	req.Header.Set("Authorization", "Bearer "+c.credential)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return TerminalTicket{}, fmt.Errorf("terminal ticket request failed")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		_, _ = io.CopyN(io.Discard, resp.Body, 4097)
+		return TerminalTicket{}, fmt.Errorf("terminal ticket request rejected with status %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 4097))
+	if err != nil || len(data) == 0 || len(data) > 4096 {
+		return TerminalTicket{}, fmt.Errorf("terminal ticket response size is invalid")
+	}
+	if err := rejectDuplicateJSONFields(data); err != nil {
+		return TerminalTicket{}, fmt.Errorf("terminal ticket response is invalid")
+	}
+	var raw struct {
+		Ticket    string `json:"ticket"`
+		ExpiresAt string `json:"expiresAt"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&raw); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		return TerminalTicket{}, fmt.Errorf("terminal ticket response is invalid")
+	}
+	if !terminalTicketPattern.MatchString(raw.Ticket) || len(raw.ExpiresAt) != len("2006-01-02T15:04:05Z") {
+		return TerminalTicket{}, fmt.Errorf("terminal ticket response is invalid")
+	}
+	expiresAt, err := time.Parse("2006-01-02T15:04:05Z", raw.ExpiresAt)
+	if err != nil || expiresAt.Format("2006-01-02T15:04:05Z") != raw.ExpiresAt {
+		return TerminalTicket{}, fmt.Errorf("terminal ticket response is invalid")
+	}
+	now := time.Now().UTC()
+	if c.now != nil {
+		now = c.now().UTC()
+	}
+	if !expiresAt.After(now) || expiresAt.After(now.Add(time.Minute)) {
+		return TerminalTicket{}, fmt.Errorf("terminal ticket response expiry is invalid")
+	}
+	return TerminalTicket{Ticket: raw.Ticket, ExpiresAt: expiresAt}, nil
+}
+
+func rejectDuplicateJSONFields(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	var walk func() error
+	walk = func() error {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		delim, ok := token.(json.Delim)
+		if !ok {
+			return nil
+		}
+		switch delim {
+		case '{':
+			seen := make(map[string]struct{})
+			for decoder.More() {
+				keyToken, err := decoder.Token()
+				if err != nil {
+					return err
+				}
+				key, ok := keyToken.(string)
+				if !ok {
+					return fmt.Errorf("invalid object key")
+				}
+				if _, exists := seen[key]; exists {
+					return fmt.Errorf("duplicate object key")
+				}
+				seen[key] = struct{}{}
+				if err := walk(); err != nil {
+					return err
+				}
+			}
+			_, err = decoder.Token()
+			return err
+		case '[':
+			for decoder.More() {
+				if err := walk(); err != nil {
+					return err
+				}
+			}
+			_, err = decoder.Token()
+			return err
+		default:
+			return fmt.Errorf("invalid JSON delimiter")
+		}
+	}
+	return walk()
 }
 
 func (c *Client) Enroll(ctx context.Context, token string, info identity.Info) (Enrollment, error) {
@@ -112,6 +248,9 @@ func (c *Client) PollCommands(ctx context.Context, waitSeconds int) ([]json.RawM
 }
 
 func (c *Client) StartCommand(ctx context.Context, commandID, leaseToken string) error {
+	if !genericCommandUUID.MatchString(commandID) || !genericCommandUUID.MatchString(leaseToken) {
+		return fmt.Errorf("command identifiers are invalid")
+	}
 	payload := struct {
 		LeaseToken string `json:"leaseToken"`
 	}{LeaseToken: leaseToken}
@@ -131,6 +270,9 @@ func (c *Client) StartCommand(ctx context.Context, commandID, leaseToken string)
 }
 
 func (c *Client) FinishCommand(ctx context.Context, commandID string, result protocol.CommandResult) error {
+	if !genericCommandUUID.MatchString(commandID) || !genericCommandUUID.MatchString(result.LeaseToken) {
+		return fmt.Errorf("command identifiers are invalid")
+	}
 	var response map[string]interface{}
 	path := "/agent/v1/commands/" + commandID + "/result"
 	return c.authenticatedJSON(ctx, http.MethodPost, path, result, &response)

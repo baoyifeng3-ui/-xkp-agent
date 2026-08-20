@@ -11,6 +11,7 @@ import (
 	"xkp-agent/internal/container"
 	"xkp-agent/internal/power"
 	"xkp-agent/internal/protocol"
+	terminalpkg "xkp-agent/internal/terminal"
 )
 
 const maxCommandResultRunes = 512
@@ -26,6 +27,17 @@ type CommandDispatcher struct {
 	store     CommandStore
 	executor  container.Executor
 	grant     OperationGrantStore
+	terminal  terminalpkg.TerminalManager
+}
+
+func NewCommandDispatcherWithTerminal(transport CommandTransport, powerController power.Controller,
+	store CommandStore, manager terminalpkg.TerminalManager) *CommandDispatcher {
+	dispatcher := NewCommandDispatcherWithStore(transport, powerController, store)
+	if manager == nil {
+		panic("terminal manager is required")
+	}
+	dispatcher.terminal = manager
+	return dispatcher
 }
 
 func NewCommandDispatcher(transport CommandTransport, powerController power.Controller) *CommandDispatcher {
@@ -63,7 +75,20 @@ func NewCommandDispatcherWithGrant(transport CommandTransport, powerController p
 	return dispatcher
 }
 
+func NewCommandDispatcherWithGrantAndTerminal(transport CommandTransport, powerController power.Controller,
+	store CommandStore, executor container.Executor, grant OperationGrantStore, manager terminalpkg.TerminalManager) *CommandDispatcher {
+	d := NewCommandDispatcherWithGrant(transport, powerController, store, executor, grant)
+	if manager == nil {
+		panic("terminal manager is required")
+	}
+	d.terminal = manager
+	return d
+}
+
 func (d *CommandDispatcher) Dispatch(ctx context.Context, command protocol.Command) error {
+	if command.Type == protocol.OpenRootTerminal {
+		return d.dispatchTerminal(ctx, command)
+	}
 	if command.Version != 1 || (command.Type != protocol.ShutdownServer && !isEnvironmentCommand(command.Type)) {
 		return fmt.Errorf("unsupported command type or version")
 	}
@@ -123,6 +148,56 @@ func (d *CommandDispatcher) Dispatch(ctx context.Context, command protocol.Comma
 	}
 	if powerErr != nil {
 		return fmt.Errorf("execute shutdown: %w", powerErr)
+	}
+	return nil
+}
+
+func (d *CommandDispatcher) dispatchTerminal(ctx context.Context, command protocol.Command) error {
+	if command.Version != 1 || command.Terminal == nil {
+		return fmt.Errorf("terminal command is invalid")
+	}
+	if d.terminal == nil {
+		return fmt.Errorf("terminal manager is not configured")
+	}
+	if err := d.transport.StartCommand(ctx, command.CommandID, command.LeaseToken); err != nil {
+		return fmt.Errorf("acknowledge terminal command start: %w", err)
+	}
+	if err := d.terminal.Start(ctx, command); err != nil {
+		code := "TERMINAL_START_FAILED"
+		var terminalErr *terminalpkg.Error
+		if errors.As(err, &terminalErr) {
+			switch terminalErr.Code {
+			case "TERMINAL_ALREADY_ACTIVE", "TERMINAL_RECOVERY_PENDING", "TERMINAL_COMMAND_INVALID", "TERMINAL_COMMAND_EXPIRED", "TERMINAL_START_FAILED", "TERMINAL_UNSUPPORTED_PLATFORM":
+				code = terminalErr.Code
+			}
+		}
+		message := "terminal session could not be started"
+		if code == "TERMINAL_ALREADY_ACTIVE" {
+			message = "another terminal session is already active"
+		} else if code == "TERMINAL_RECOVERY_PENDING" {
+			message = "terminal recovery report is pending"
+		} else if code == "TERMINAL_COMMAND_INVALID" {
+			message = "terminal command is invalid"
+		} else if code == "TERMINAL_COMMAND_EXPIRED" {
+			message = "terminal command has expired"
+		} else if code == "TERMINAL_UNSUPPORTED_PLATFORM" {
+			message = "terminal sessions are unsupported on this platform"
+		}
+		result := protocol.CommandResult{LeaseToken: command.LeaseToken, Success: false, Code: code, Message: message}
+		if recorder, ok := d.terminal.(terminalpkg.StartFailureRecorder); ok && code == "TERMINAL_START_FAILED" {
+			if persistErr := recorder.RecordStartFailure(ctx, command, code, message); persistErr != nil {
+				return fmt.Errorf("persist terminal start failure: %w", persistErr)
+			}
+		}
+		if reportErr := d.transport.FinishCommand(ctx, command.CommandID, result); reportErr != nil {
+			return fmt.Errorf("report terminal start failure: %w", reportErr)
+		}
+		if recorder, ok := d.terminal.(terminalpkg.StartFailureRecorder); ok && code == "TERMINAL_START_FAILED" {
+			if clearErr := recorder.ClearStartFailure(); clearErr != nil {
+				return fmt.Errorf("clear terminal start failure: %w", clearErr)
+			}
+		}
+		return fmt.Errorf("start terminal session: %s", code)
 	}
 	return nil
 }

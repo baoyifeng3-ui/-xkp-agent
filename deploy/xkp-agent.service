@@ -5,12 +5,13 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=xkp-agent
-Group=xkp-agent
+User=root
+Group=root
 SupplementaryGroups=docker video render
 ExecStart=/usr/local/bin/xkp-agent --config /etc/xkp-agent/agent.yml
 Restart=on-failure
 RestartSec=5s
+UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=false

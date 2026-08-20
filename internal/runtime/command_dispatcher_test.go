@@ -11,6 +11,7 @@ import (
 
 	"xkp-agent/internal/container"
 	"xkp-agent/internal/protocol"
+	terminalpkg "xkp-agent/internal/terminal"
 )
 
 type commandTransportStub struct {
@@ -18,6 +19,144 @@ type commandTransportStub struct {
 	startErr   error
 	finishErr  error
 	lastResult protocol.CommandResult
+}
+
+type terminalManagerStub struct {
+	order  *[]string
+	err    error
+	active bool
+}
+
+type startFailureRecorderStub struct {
+	terminalManagerStub
+	recorded, cleared bool
+}
+
+func (m *startFailureRecorderStub) RecordStartFailure(context.Context, protocol.Command, string, string) error {
+	m.recorded = true
+	return nil
+}
+func (m *startFailureRecorderStub) ClearStartFailure() error { m.cleared = true; return nil }
+
+func (m *terminalManagerStub) Start(context.Context, protocol.Command) error {
+	*m.order = append(*m.order, "terminal-start")
+	if m.err == nil {
+		m.active = true
+	}
+	return m.err
+}
+func (m *terminalManagerStub) Active() bool                        { return m.active }
+func (m *terminalManagerStub) Close(context.Context, string) error { m.active = false; return nil }
+
+type panicCommandStore struct{}
+
+func (*panicCommandStore) Load() (*StoredCommand, error) { panic("terminal used ordinary store") }
+func (*panicCommandStore) Save(StoredCommand) error      { panic("terminal used ordinary store") }
+func (*panicCommandStore) Clear() error                  { panic("terminal used ordinary store") }
+
+func TestDispatcherAcknowledgesAndStartsTerminalWithoutOrdinaryStore(t *testing.T) {
+	transport := &commandTransportStub{}
+	manager := &terminalManagerStub{order: &transport.order}
+	dispatcher := NewCommandDispatcherWithTerminal(transport, &powerStub{order: &transport.order}, &panicCommandStore{}, manager)
+	started := time.Now()
+	if err := dispatcher.Dispatch(context.Background(), terminalRuntimeCommand()); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(started) > 100*time.Millisecond {
+		t.Fatal("dispatcher waited for terminal lifetime")
+	}
+	if !reflect.DeepEqual(transport.order, []string{"start", "terminal-start"}) {
+		t.Fatalf("order = %v", transport.order)
+	}
+}
+
+func TestDispatcherRequiresConfiguredTerminalManagerBeforeAcknowledgement(t *testing.T) {
+	transport := &commandTransportStub{}
+	dispatcher := NewCommandDispatcher(transport, &powerStub{order: &transport.order})
+	if err := dispatcher.Dispatch(context.Background(), terminalRuntimeCommand()); err == nil {
+		t.Fatal("terminal accepted without manager")
+	}
+	if len(transport.order) != 0 {
+		t.Fatalf("order = %v", transport.order)
+	}
+}
+
+func TestDispatcherFinishesSecondActiveTerminalWithoutDisturbingFirst(t *testing.T) {
+	transport := &commandTransportStub{}
+	manager := &terminalManagerStub{order: &transport.order, active: true,
+		err: &terminalpkg.Error{Code: "TERMINAL_ALREADY_ACTIVE"}}
+	dispatcher := NewCommandDispatcherWithTerminal(transport, &powerStub{order: &transport.order}, &panicCommandStore{}, manager)
+	err := dispatcher.Dispatch(context.Background(), terminalRuntimeCommand())
+	if err == nil || !manager.active || !reflect.DeepEqual(transport.order, []string{"start", "terminal-start", "result"}) {
+		t.Fatalf("error=%v active=%v order=%v", err, manager.active, transport.order)
+	}
+	if transport.lastResult.Success || transport.lastResult.Code != "TERMINAL_ALREADY_ACTIVE" ||
+		transport.lastResult.LeaseToken != terminalRuntimeCommand().LeaseToken {
+		t.Fatalf("result = %#v", transport.lastResult)
+	}
+}
+
+func TestDispatcherReportsStableFailureWhenTerminalLaunchFailsAfterAck(t *testing.T) {
+	transport := &commandTransportStub{}
+	manager := &terminalManagerStub{order: &transport.order, err: &terminalpkg.Error{Code: "TERMINAL_START_FAILED"}}
+	dispatcher := NewCommandDispatcherWithTerminal(transport, &powerStub{order: &transport.order}, &panicCommandStore{}, manager)
+	if err := dispatcher.Dispatch(context.Background(), terminalRuntimeCommand()); err == nil {
+		t.Fatal("expected failure")
+	}
+	if transport.lastResult.Code != "TERMINAL_START_FAILED" || transport.lastResult.Message != "terminal session could not be started" {
+		t.Fatalf("result = %#v", transport.lastResult)
+	}
+}
+
+func TestDispatcherReportsUnsupportedTerminalPlatform(t *testing.T) {
+	transport := &commandTransportStub{}
+	manager := &terminalManagerStub{order: &transport.order, err: &terminalpkg.Error{Code: "TERMINAL_UNSUPPORTED_PLATFORM"}}
+	dispatcher := NewCommandDispatcherWithTerminal(transport, &powerStub{order: &transport.order}, &panicCommandStore{}, manager)
+	_ = dispatcher.Dispatch(context.Background(), terminalRuntimeCommand())
+	if transport.lastResult.Code != "TERMINAL_UNSUPPORTED_PLATFORM" {
+		t.Fatalf("result = %#v", transport.lastResult)
+	}
+}
+
+func TestDispatcherDoesNotPersistConflictFailures(t *testing.T) {
+	transport := &commandTransportStub{}
+	manager := &startFailureRecorderStub{terminalManagerStub: terminalManagerStub{order: &transport.order, err: &terminalpkg.Error{Code: "TERMINAL_ALREADY_ACTIVE"}}}
+	d := NewCommandDispatcherWithTerminal(transport, &powerStub{order: &transport.order}, &panicCommandStore{}, manager)
+	_ = d.Dispatch(context.Background(), terminalRuntimeCommand())
+	if manager.recorded {
+		t.Fatal("conflict failure overwrote recovery")
+	}
+}
+
+func TestDispatcherClearsPersistedStartFailureAfterSuccessfulReport(t *testing.T) {
+	transport := &commandTransportStub{}
+	manager := &startFailureRecorderStub{terminalManagerStub: terminalManagerStub{order: &transport.order, err: &terminalpkg.Error{Code: "TERMINAL_START_FAILED"}}}
+	d := NewCommandDispatcherWithTerminal(transport, &powerStub{order: &transport.order}, &panicCommandStore{}, manager)
+	_ = d.Dispatch(context.Background(), terminalRuntimeCommand())
+	if !manager.recorded || !manager.cleared {
+		t.Fatalf("recorded=%v cleared=%v", manager.recorded, manager.cleared)
+	}
+}
+
+func TestDispatcherRetainsPersistedStartFailureWhenReportFails(t *testing.T) {
+	transport := &commandTransportStub{finishErr: errors.New("network")}
+	manager := &startFailureRecorderStub{terminalManagerStub: terminalManagerStub{order: &transport.order, err: &terminalpkg.Error{Code: "TERMINAL_START_FAILED"}}}
+	d := NewCommandDispatcherWithTerminal(transport, &powerStub{order: &transport.order}, &panicCommandStore{}, manager)
+	if err := d.Dispatch(context.Background(), terminalRuntimeCommand()); err == nil {
+		t.Fatal("expected report error")
+	}
+	if !manager.recorded || manager.cleared {
+		t.Fatalf("recorded=%v cleared=%v", manager.recorded, manager.cleared)
+	}
+}
+
+func terminalRuntimeCommand() protocol.Command {
+	return protocol.Command{CommandID: "77777777-7777-4777-8777-777777777777", Type: protocol.OpenRootTerminal,
+		Version: 1, LeaseToken: "66666666-6666-4666-8666-666666666666", Terminal: &protocol.TerminalPayload{
+			SessionID:               "44444444-4444-4444-8444-444444444444",
+			RelayURL:                "wss://management.example/terminal/v1/agent/44444444-4444-4444-8444-444444444444",
+			AgentConnectionDeadline: time.Date(2026, 8, 20, 10, 1, 30, 0, time.UTC), IdleTimeoutSeconds: 600,
+			AbsoluteExpiresAt: time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)}}
 }
 
 func (t *commandTransportStub) StartCommand(context.Context, string, string) error {

@@ -5,7 +5,12 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
+
+const rootTerminalFixture = "../../testdata/command-open-root-terminal-v1.json"
+
+var rootTerminalNow = time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 
 func TestDecodeCommandAcceptsSharedShutdownFixture(t *testing.T) {
 	data, err := os.ReadFile("../../testdata/command-shutdown-v1.json")
@@ -21,6 +26,34 @@ func TestDecodeCommandAcceptsSharedShutdownFixture(t *testing.T) {
 	}
 	if string(command.Payload) != "{}" {
 		t.Fatalf("payload = %s", command.Payload)
+	}
+}
+
+func TestDecodeCommandPreservesLegacyIdentifierAndTimestampCompatibility(t *testing.T) {
+	shutdown := []byte(`{"commandId":"11111111-2222-4333-8444-555555555555","type":"SHUTDOWN_SERVER","version":1,"leaseToken":"AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE","leaseExpiresAt":"2026-08-19T12:05:00.123+00:00","payload":{}}`)
+	if _, err := DecodeCommand(shutdown); err != nil {
+		t.Fatalf("legacy shutdown rejected: %v", err)
+	}
+	environment, err := os.ReadFile("../../testdata/command-start-training-environment-v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope map[string]interface{}
+	if err := json.Unmarshal(environment, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	envelope["commandId"] = "11111111-2222-4333-8444-555555555555"
+	envelope["leaseToken"] = "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"
+	envelope["leaseExpiresAt"] = "2026-08-19T12:05:00.123+00:00"
+	payload := envelope["payload"].(map[string]interface{})
+	payload["environmentId"] = "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"
+	payload["operationId"] = "BBBBBBBB-CCCC-4DDD-8EEE-FFFFFFFFFFFF"
+	mutated, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeCommand(mutated); err != nil {
+		t.Fatalf("legacy environment rejected: %v", err)
 	}
 }
 
@@ -141,5 +174,142 @@ func TestDecodeCommandRejectsUnsafeEnvironmentPayloads(t *testing.T) {
 				t.Fatal("expected unsafe payload rejection")
 			}
 		})
+	}
+}
+
+func TestDecodeCommandAtAcceptsSharedRootTerminalFixture(t *testing.T) {
+	data, err := os.ReadFile(rootTerminalFixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := DecodeCommandAt(data, rootTerminalNow, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command.CommandID != "77777777-7777-4777-8777-777777777777" ||
+		command.Type != OpenRootTerminal || command.Version != 1 ||
+		command.LeaseToken != "66666666-6666-4666-8666-666666666666" {
+		t.Fatalf("command = %#v", command)
+	}
+	if command.LeaseExpiresAt != time.Date(2026, 8, 19, 12, 5, 0, 0, time.UTC) {
+		t.Fatalf("lease expiry = %s", command.LeaseExpiresAt)
+	}
+	if command.Terminal == nil || command.Environment != nil {
+		t.Fatalf("typed payloads = terminal %#v environment %#v", command.Terminal, command.Environment)
+	}
+	payload := command.Terminal
+	if payload.SessionID != "44444444-4444-4444-8444-444444444444" ||
+		payload.RelayURL != "wss://management.example/terminal/v1/agent/44444444-4444-4444-8444-444444444444" ||
+		payload.AgentConnectionDeadline != time.Date(2026, 8, 19, 12, 1, 30, 0, time.UTC) ||
+		payload.IdleTimeoutSeconds != 600 ||
+		payload.AbsoluteExpiresAt != time.Date(2026, 8, 19, 14, 0, 0, 0, time.UTC) {
+		t.Fatalf("terminal payload = %#v", payload)
+	}
+}
+
+func TestDecodeCommandRejectsExpiredRootTerminalAtRuntime(t *testing.T) {
+	data, err := os.ReadFile(rootTerminalFixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeCommand(data); err == nil {
+		t.Fatal("expected historical connection deadline rejection")
+	}
+}
+
+func TestDecodeCommandAtRejectsUnsafeRootTerminalPayloads(t *testing.T) {
+	data, err := os.ReadFile(rootTerminalFixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := string(data)
+	tests := []struct {
+		name string
+		old  string
+		new  string
+	}{
+		{"unknown ticket", `"idleTimeoutSeconds": 600`, `"ticket": "secret", "idleTimeoutSeconds": 600`},
+		{"unknown credential", `"idleTimeoutSeconds": 600`, `"credential": "secret", "idleTimeoutSeconds": 600`},
+		{"unknown shell", `"idleTimeoutSeconds": 600`, `"shell": "powershell", "idleTimeoutSeconds": 600`},
+		{"unknown executable", `"idleTimeoutSeconds": 600`, `"executable": "cmd.exe", "idleTimeoutSeconds": 600`},
+		{"unknown environment", `"idleTimeoutSeconds": 600`, `"environment": {}, "idleTimeoutSeconds": 600`},
+		{"unknown command", `"idleTimeoutSeconds": 600`, `"command": "whoami", "idleTimeoutSeconds": 600`},
+		{"insecure ws", "wss://management.example/", "ws://management.example/"},
+		{"http scheme", "wss://management.example/", "http://management.example/"},
+		{"file scheme", "wss://management.example/", "file://management.example/"},
+		{"userinfo", "wss://management.example/", "wss://user:secret@management.example/"},
+		{"missing host", "wss://management.example/", "wss:///"},
+		{"query", `wss://management.example/terminal/v1/agent/44444444-4444-4444-8444-444444444444`, `wss://management.example/terminal/v1/agent/44444444-4444-4444-8444-444444444444?credential=secret`},
+		{"fragment", `wss://management.example/terminal/v1/agent/44444444-4444-4444-8444-444444444444`, `wss://management.example/terminal/v1/agent/44444444-4444-4444-8444-444444444444#fragment`},
+		{"wrong relay session", "/44444444-4444-4444-8444-444444444444", "/55555555-5555-4555-8555-555555555555"},
+		{"wrong relay path", "/terminal/v1/agent/", "/terminal/v1/browser/"},
+		{"encoded relay path", "/terminal/v1/agent/", "/terminal%2Fv1/agent/"},
+		{"noncanonical session", "44444444-4444-4444-8444-444444444444", "44444444-4444-4444-8444-44444444444A"},
+		{"noncanonical command id", "77777777-7777-4777-8777-777777777777", "77777777-7777-4777-8777-77777777777A"},
+		{"idle timeout", `"idleTimeoutSeconds": 600`, `"idleTimeoutSeconds": 599`},
+		{"deadline not future", "2026-08-19T12:01:30Z", "2026-08-19T12:00:00Z"},
+		{"absolute not after deadline", "2026-08-19T14:00:00Z", "2026-08-19T12:01:30Z"},
+		{"absolute beyond two hours", "2026-08-19T14:00:00Z", "2026-08-19T14:01:31Z"},
+		{"non UTC deadline", "2026-08-19T12:01:30Z", "2026-08-19T20:01:30+08:00"},
+		{"fractional deadline", "2026-08-19T12:01:30Z", "2026-08-19T12:01:30.000Z"},
+		{"non UTC lease expiry", "2026-08-19T12:05:00Z", "2026-08-19T20:05:00+08:00"},
+		{"fractional lease expiry", "2026-08-19T12:05:00Z", "2026-08-19T12:05:00.000Z"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body := strings.Replace(valid, test.old, test.new, 1)
+			if body == valid {
+				t.Fatalf("mutation did not apply: %q", test.old)
+			}
+			if _, err := DecodeCommandAt([]byte(body), rootTerminalNow, false); err == nil {
+				t.Fatal("expected terminal payload rejection")
+			}
+		})
+	}
+}
+
+func TestDecodeCommandAtRejectsDuplicateFields(t *testing.T) {
+	data, err := os.ReadFile(rootTerminalFixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := string(data)
+	tests := []struct {
+		name string
+		old  string
+		new  string
+	}{
+		{"envelope", `"version": 1`, `"version": 1, "version": 1`},
+		{"payload", `"idleTimeoutSeconds": 600`, `"idleTimeoutSeconds": 600, "idleTimeoutSeconds": 600`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body := strings.Replace(valid, test.old, test.new, 1)
+			if _, err := DecodeCommandAt([]byte(body), rootTerminalNow, false); err == nil {
+				t.Fatal("expected duplicate field rejection")
+			}
+		})
+	}
+}
+
+func TestDecodeCommandAtAllowsOnlyExplicitInsecureLoopback(t *testing.T) {
+	data, err := os.ReadFile(rootTerminalFixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := string(data)
+	loopback := strings.Replace(valid,
+		"wss://management.example/", "ws://127.0.0.1:19147/", 1)
+	if _, err := DecodeCommandAt([]byte(loopback), rootTerminalNow, true); err != nil {
+		t.Fatalf("explicit local relay rejected: %v", err)
+	}
+	if _, err := DecodeCommandAt([]byte(loopback), rootTerminalNow, false); err == nil {
+		t.Fatal("production accepted insecure local relay")
+	}
+	for _, host := range []string{"management.example", "127.0.0.2", "0.0.0.0"} {
+		body := strings.Replace(loopback, "127.0.0.1", host, 1)
+		if _, err := DecodeCommandAt([]byte(body), rootTerminalNow, true); err == nil {
+			t.Fatalf("insecure host %q accepted", host)
+		}
 	}
 }

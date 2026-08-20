@@ -1,0 +1,14 @@
+{
+  "commandId": "77777777-7777-4777-8777-777777777777",
+  "type": "OPEN_ROOT_TERMINAL",
+  "version": 1,
+  "leaseToken": "66666666-6666-4666-8666-666666666666",
+  "leaseExpiresAt": "2026-08-19T12:05:00Z",
+  "payload": {
+    "sessionId": "44444444-4444-4444-8444-444444444444",
+    "relayUrl": "wss://management.example/terminal/v1/agent/44444444-4444-4444-8444-444444444444",
+    "agentConnectionDeadline": "2026-08-19T12:01:30Z",
+    "idleTimeoutSeconds": 600,
+    "absoluteExpiresAt": "2026-08-19T14:00:00Z"
+  }
+}
