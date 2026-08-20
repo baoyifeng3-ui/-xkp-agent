@@ -184,6 +184,11 @@ func (d *CommandDispatcher) dispatchTerminal(ctx context.Context, command protoc
 			message = "terminal sessions are unsupported on this platform"
 		}
 		result := protocol.CommandResult{LeaseToken: command.LeaseToken, Success: false, Code: code, Message: message}
+		if recorder, ok := d.terminal.(terminalpkg.StartFailureRecorder); ok {
+			if persistErr := recorder.RecordStartFailure(ctx, command, code, message); persistErr != nil {
+				return fmt.Errorf("persist terminal start failure: %w", persistErr)
+			}
+		}
 		if reportErr := d.transport.FinishCommand(ctx, command.CommandID, result); reportErr != nil {
 			return fmt.Errorf("report terminal start failure: %w", reportErr)
 		}

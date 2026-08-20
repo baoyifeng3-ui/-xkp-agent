@@ -70,3 +70,16 @@ func TestTokenBucketFailsClosedWithoutSleeping(t *testing.T) {
 		t.Fatal("refill denied")
 	}
 }
+
+func TestControlBucketChargesActualFrameLength(t *testing.T) {
+	now := time.Unix(100, 0)
+	b := newTokenBucket(now)
+	for i := 0; i < 100; i++ {
+		if !b.allow(20, now) {
+			t.Fatalf("small control %d rejected", i)
+		}
+	}
+	if b.allow(tokenBurst, now) {
+		t.Fatal("aggregate over burst accepted")
+	}
+}

@@ -240,7 +240,25 @@ func relaySession(ctx context.Context, conn *websocket.Conn, ptmx *os.File, cmd 
 					}
 					return
 				}
-				if _, e = ptmx.Write(data); e != nil {
+				offset := 0
+				for offset < len(data) {
+					n, writeErr := ptmx.Write(data[offset:])
+					if n > 0 {
+						offset += n
+					}
+					if writeErr != nil {
+						e = writeErr
+						break
+					}
+					if n == 0 {
+						e = io.ErrShortWrite
+						break
+					}
+				}
+				if e == nil && offset != len(data) {
+					e = io.ErrShortWrite
+				}
+				if e != nil {
 					select {
 					case errs <- e:
 					default:
@@ -249,7 +267,7 @@ func relaySession(ctx context.Context, conn *websocket.Conn, ptmx *os.File, cmd 
 				}
 				lastIO.Store(at.UnixNano())
 			case websocket.TextMessage:
-				if !controls.allow(maxRelayFrame, at) {
+				if !controls.allow(len(data), at) {
 					select {
 					case errs <- fmt.Errorf("control rate exceeded"):
 					default:

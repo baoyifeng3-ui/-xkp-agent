@@ -2,6 +2,7 @@ package terminal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -21,6 +22,10 @@ type Runner interface {
 
 type Reporter interface {
 	FinishCommand(context.Context, string, protocol.CommandResult) error
+}
+
+type StartFailureRecorder interface {
+	RecordStartFailure(context.Context, protocol.Command, string, string) error
 }
 
 type Error struct{ Code string }
@@ -125,6 +130,25 @@ func (m *Manager) Start(_ context.Context, command protocol.Command) error {
 	return nil
 }
 
+func (m *Manager) RecordStartFailure(_ context.Context, command protocol.Command, code, message string) error {
+	if command.Terminal == nil {
+		return &Error{Code: "TERMINAL_COMMAND_INVALID"}
+	}
+	recovery := TerminalRecovery{SessionID: command.Terminal.SessionID, CommandID: command.CommandID, LeaseToken: command.LeaseToken,
+		AgentConnectionDeadline: command.Terminal.AgentConnectionDeadline, AbsoluteExpiresAt: command.Terminal.AbsoluteExpiresAt,
+		PendingCode: code, PendingMessage: message}
+	if err := validateRecovery(recovery); err != nil {
+		return err
+	}
+	if err := m.store.Save(recovery); err != nil {
+		return fmt.Errorf("persist terminal start failure: %w", err)
+	}
+	m.mu.Lock()
+	m.recoveryPending = true
+	m.mu.Unlock()
+	return nil
+}
+
 func (m *Manager) rollbackStart(cancel context.CancelFunc, done chan struct{}) {
 	cancel()
 	m.mu.Lock()
@@ -142,6 +166,9 @@ func (m *Manager) awaitCompletion(sessionCtx context.Context, done chan struct{}
 		if ok {
 			runErr = value
 		}
+		if runErr == nil && sessionCtx.Err() != nil {
+			runErr = sessionCtx.Err()
+		}
 	case <-sessionCtx.Done():
 		runErr = sessionCtx.Err()
 	}
@@ -149,10 +176,19 @@ func (m *Manager) awaitCompletion(sessionCtx context.Context, done chan struct{}
 		LeaseToken: recovery.LeaseToken, Success: runErr == nil,
 		Code: "TERMINAL_SESSION_CLOSED", Message: "terminal session closed",
 	}
+	if recovery.PendingCode != "" {
+		result.Success = false
+		result.Code = recovery.PendingCode
+		result.Message = recovery.PendingMessage
+	}
 	if runErr != nil {
 		result.Success = false
 		result.Code = "TERMINAL_SESSION_FAILED"
 		result.Message = "terminal session failed"
+		if errors.Is(runErr, context.DeadlineExceeded) {
+			result.Code = "TERMINAL_ABSOLUTE_TIMEOUT"
+			result.Message = "terminal session expired"
+		}
 	}
 	reported := false
 	for attempt := 0; attempt < 3; attempt++ {
@@ -247,6 +283,10 @@ func (m *Manager) RetryRecovery(ctx context.Context) (bool, error) {
 	result := protocol.CommandResult{
 		LeaseToken: recovery.LeaseToken, Success: false,
 		Code: "TERMINAL_INTERRUPTED_BY_AGENT_RESTART", Message: "terminal session interrupted by agent restart",
+	}
+	if recovery.PendingCode != "" {
+		result.Code = recovery.PendingCode
+		result.Message = recovery.PendingMessage
 	}
 	if err := m.reporter.FinishCommand(ctx, recovery.CommandID, result); err != nil {
 		return true, fmt.Errorf("report terminal recovery: %w", err)

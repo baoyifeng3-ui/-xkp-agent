@@ -22,6 +22,8 @@ type TerminalRecovery struct {
 	LeaseToken              string    `json:"leaseToken"`
 	AgentConnectionDeadline time.Time `json:"agentConnectionDeadline"`
 	AbsoluteExpiresAt       time.Time `json:"absoluteExpiresAt"`
+	PendingCode             string    `json:"pendingCode,omitempty"`
+	PendingMessage          string    `json:"pendingMessage,omitempty"`
 }
 
 type RecoveryStore interface {

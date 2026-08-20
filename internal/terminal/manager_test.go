@@ -279,6 +279,32 @@ func TestManagerStartupRecoveryReportsInterruptedAndRetainsOnFailure(t *testing.
 	}
 }
 
+func TestManagerPersistsTerminalStartFailureForRetry(t *testing.T) {
+	store := &memoryRecoveryStore{}
+	reporter := &reporterStub{failFor: 1}
+	m, err := NewManager(store, &runnerStub{}, reporter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := terminalCommand()
+	if err := m.RecordStartFailure(context.Background(), cmd, "TERMINAL_START_FAILED", "terminal session could not be started"); err != nil {
+		t.Fatal(err)
+	}
+	if store.state == nil || store.state.PendingCode != "TERMINAL_START_FAILED" {
+		t.Fatalf("recovery=%#v", store.state)
+	}
+	if _, err := m.RetryRecovery(context.Background()); err == nil || store.state == nil {
+		t.Fatalf("expected retained recovery, state=%#v err=%v", store.state, err)
+	}
+	reporter.failFor = 0
+	if _, err := m.RetryRecovery(context.Background()); err != nil || store.state != nil {
+		t.Fatalf("retry err=%v state=%#v", err, store.state)
+	}
+	if reporter.results[len(reporter.results)-1].Code != "TERMINAL_START_FAILED" {
+		t.Fatalf("results=%#v", reporter.results)
+	}
+}
+
 func TestManagerConstructorFailsClosedOnCorruptRecovery(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "recovery.json")
 	if err := os.WriteFile(path, []byte(`{"ticket":"secret"}`), 0600); err != nil {
