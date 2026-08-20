@@ -108,7 +108,7 @@ func TestManagerStartIsAsynchronousAndIndependentOfPollContext(t *testing.T) {
 		t.Fatal("recovery not cleared")
 	}
 	if len(reporter.results) != 1 || reporter.ids[0] != terminalCommand().CommandID ||
-		!reporter.results[0].Success || reporter.results[0].Code != "TERMINAL_SESSION_COMPLETED" ||
+		!reporter.results[0].Success || reporter.results[0].Code != "TERMINAL_SESSION_CLOSED" ||
 		reporter.results[0].LeaseToken != terminalCommand().LeaseToken {
 		t.Fatalf("reports = %#v", reporter.results)
 	}

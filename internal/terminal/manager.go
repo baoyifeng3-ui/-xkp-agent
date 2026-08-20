@@ -147,7 +147,7 @@ func (m *Manager) awaitCompletion(sessionCtx context.Context, done chan struct{}
 	}
 	result := protocol.CommandResult{
 		LeaseToken: recovery.LeaseToken, Success: runErr == nil,
-		Code: "TERMINAL_SESSION_COMPLETED", Message: "terminal session completed",
+		Code: "TERMINAL_SESSION_CLOSED", Message: "terminal session closed",
 	}
 	if runErr != nil {
 		result.Success = false

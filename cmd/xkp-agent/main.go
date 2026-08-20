@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	dockerclient "github.com/docker/docker/client"
 	"xkp-agent/internal/client"
@@ -98,7 +99,11 @@ func main() {
 	agent := agentruntime.NewAgentWithGrantStore(cfg.AgentID, version, gatherer, api, dispatcher, grantStore)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	defer terminalManager.Close(context.Background(), "agent-shutdown")
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = terminalManager.Close(shutdownCtx, "agent-shutdown")
+	}()
 	if err := agent.Run(ctx); err != nil {
 		fail("agent runtime stopped", err)
 	}

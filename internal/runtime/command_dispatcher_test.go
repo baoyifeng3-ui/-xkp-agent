@@ -97,6 +97,16 @@ func TestDispatcherReportsStableFailureWhenTerminalLaunchFailsAfterAck(t *testin
 	}
 }
 
+func TestDispatcherReportsUnsupportedTerminalPlatform(t *testing.T) {
+	transport := &commandTransportStub{}
+	manager := &terminalManagerStub{order: &transport.order, err: &terminalpkg.Error{Code: "TERMINAL_UNSUPPORTED_PLATFORM"}}
+	dispatcher := NewCommandDispatcherWithTerminal(transport, &powerStub{order: &transport.order}, &panicCommandStore{}, manager)
+	_ = dispatcher.Dispatch(context.Background(), terminalRuntimeCommand())
+	if transport.lastResult.Code != "TERMINAL_UNSUPPORTED_PLATFORM" {
+		t.Fatalf("result = %#v", transport.lastResult)
+	}
+}
+
 func terminalRuntimeCommand() protocol.Command {
 	return protocol.Command{CommandID: "77777777-7777-4777-8777-777777777777", Type: protocol.OpenRootTerminal,
 		Version: 1, LeaseToken: "66666666-6666-4666-8666-666666666666", Terminal: &protocol.TerminalPayload{

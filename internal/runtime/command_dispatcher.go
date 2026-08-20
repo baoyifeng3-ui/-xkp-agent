@@ -167,7 +167,7 @@ func (d *CommandDispatcher) dispatchTerminal(ctx context.Context, command protoc
 		var terminalErr *terminalpkg.Error
 		if errors.As(err, &terminalErr) {
 			switch terminalErr.Code {
-			case "TERMINAL_ALREADY_ACTIVE", "TERMINAL_RECOVERY_PENDING", "TERMINAL_COMMAND_INVALID", "TERMINAL_COMMAND_EXPIRED", "TERMINAL_START_FAILED":
+			case "TERMINAL_ALREADY_ACTIVE", "TERMINAL_RECOVERY_PENDING", "TERMINAL_COMMAND_INVALID", "TERMINAL_COMMAND_EXPIRED", "TERMINAL_START_FAILED", "TERMINAL_UNSUPPORTED_PLATFORM":
 				code = terminalErr.Code
 			}
 		}
@@ -180,6 +180,8 @@ func (d *CommandDispatcher) dispatchTerminal(ctx context.Context, command protoc
 			message = "terminal command is invalid"
 		} else if code == "TERMINAL_COMMAND_EXPIRED" {
 			message = "terminal command has expired"
+		} else if code == "TERMINAL_UNSUPPORTED_PLATFORM" {
+			message = "terminal sessions are unsupported on this platform"
 		}
 		result := protocol.CommandResult{LeaseToken: command.LeaseToken, Success: false, Code: code, Message: message}
 		if reportErr := d.transport.FinishCommand(ctx, command.CommandID, result); reportErr != nil {
