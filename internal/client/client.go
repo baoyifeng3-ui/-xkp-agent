@@ -34,6 +34,7 @@ type TerminalTicket struct {
 }
 
 var canonicalTerminalUUID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+var genericCommandUUID = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[1-5][0-9A-Fa-f]{3}-[89A-Fa-f][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}$`)
 var terminalTicketPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 
 type Enrollment struct {
@@ -239,7 +240,7 @@ func (c *Client) PollCommands(ctx context.Context, waitSeconds int) ([]json.RawM
 }
 
 func (c *Client) StartCommand(ctx context.Context, commandID, leaseToken string) error {
-	if !canonicalTerminalUUID.MatchString(commandID) || !canonicalTerminalUUID.MatchString(leaseToken) {
+	if !genericCommandUUID.MatchString(commandID) || !genericCommandUUID.MatchString(leaseToken) {
 		return fmt.Errorf("command identifiers are invalid")
 	}
 	payload := struct {
@@ -261,7 +262,7 @@ func (c *Client) StartCommand(ctx context.Context, commandID, leaseToken string)
 }
 
 func (c *Client) FinishCommand(ctx context.Context, commandID string, result protocol.CommandResult) error {
-	if !canonicalTerminalUUID.MatchString(commandID) || !canonicalTerminalUUID.MatchString(result.LeaseToken) {
+	if !genericCommandUUID.MatchString(commandID) || !genericCommandUUID.MatchString(result.LeaseToken) {
 		return fmt.Errorf("command identifiers are invalid")
 	}
 	var response map[string]interface{}

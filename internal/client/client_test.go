@@ -206,6 +206,37 @@ func TestCommandClientRejectsPathInjectionIdentifiersBeforeRequest(t *testing.T)
 	}
 }
 
+func TestGenericCommandClientPreservesUppercaseUUIDCompatibility(t *testing.T) {
+	commandID := "abcdefab-cdef-4abc-8def-abcdefabcdef"
+	leaseToken := "abcdefab-cdef-4abc-8def-abcdefabcdef"
+	requests := make(chan *http.Request, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests <- r.Clone(context.Background())
+		if strings.HasSuffix(r.URL.Path, "/start") {
+			_, _ = w.Write([]byte(`{"commandId":"ABCDEFAB-CDEF-4ABC-8DEF-ABCDEFABCDEF","agentId":"agent-id","state":"RUNNING"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+	c, err := New(config.Config{ManagementURL: server.URL, AgentID: "agent-id", Credential: "agent-secret", Development: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	upperCommandID := strings.ToUpper(commandID)
+	upperLeaseToken := strings.ToUpper(leaseToken)
+	if err := c.StartCommand(context.Background(), upperCommandID, upperLeaseToken); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.FinishCommand(context.Background(), upperCommandID, protocol.CommandResult{LeaseToken: upperLeaseToken}); err != nil {
+		t.Fatal(err)
+	}
+	start, finish := <-requests, <-requests
+	if start.URL.Path != "/agent/v1/commands/"+upperCommandID+"/start" || finish.URL.Path != "/agent/v1/commands/"+upperCommandID+"/result" {
+		t.Fatalf("paths = %s, %s", start.URL.Path, finish.URL.Path)
+	}
+}
+
 func testClientWithClock(t *testing.T, baseURL string, now func() time.Time) *Client {
 	t.Helper()
 	c, err := New(config.Config{ManagementURL: baseURL, AgentID: "agent-id", Credential: "agent-secret", Development: true})
