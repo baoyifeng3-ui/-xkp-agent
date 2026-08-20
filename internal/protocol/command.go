@@ -12,6 +12,11 @@ import (
 	"time"
 )
 
+type TerminalTicket struct {
+	Ticket    string
+	ExpiresAt time.Time
+}
+
 const MaxCommandBytes = 4096
 
 type CommandType string

@@ -75,6 +75,16 @@ func NewCommandDispatcherWithGrant(transport CommandTransport, powerController p
 	return dispatcher
 }
 
+func NewCommandDispatcherWithGrantAndTerminal(transport CommandTransport, powerController power.Controller,
+	store CommandStore, executor container.Executor, grant OperationGrantStore, manager terminalpkg.TerminalManager) *CommandDispatcher {
+	d := NewCommandDispatcherWithGrant(transport, powerController, store, executor, grant)
+	if manager == nil {
+		panic("terminal manager is required")
+	}
+	d.terminal = manager
+	return d
+}
+
 func (d *CommandDispatcher) Dispatch(ctx context.Context, command protocol.Command) error {
 	if command.Type == protocol.OpenRootTerminal {
 		return d.dispatchTerminal(ctx, command)

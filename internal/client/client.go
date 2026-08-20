@@ -28,9 +28,17 @@ type Client struct {
 	now        func() time.Time
 }
 
-type TerminalTicket struct {
-	Ticket    string
-	ExpiresAt time.Time
+type TerminalTicket = protocol.TerminalTicket
+
+// Credential returns the enrolled bearer credential for authenticated websocket handshakes.
+func (c *Client) Credential() string { return c.credential }
+
+// TLSConfig returns a clone of the HTTP transport TLS settings.
+func (c *Client) TLSConfig() *tls.Config {
+	if transport, ok := c.http.Transport.(*http.Transport); ok && transport.TLSClientConfig != nil {
+		return transport.TLSClientConfig.Clone()
+	}
+	return &tls.Config{MinVersion: tls.VersionTLS12}
 }
 
 var canonicalTerminalUUID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)

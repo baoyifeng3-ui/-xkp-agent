@@ -18,6 +18,7 @@ import (
 	"xkp-agent/internal/identity"
 	"xkp-agent/internal/power"
 	agentruntime "xkp-agent/internal/runtime"
+	terminalpkg "xkp-agent/internal/terminal"
 )
 
 const version = "0.1.0"
@@ -85,10 +86,19 @@ func main() {
 		WorkspaceRoot: cfg.EnvironmentWorkspaceRoot,
 	})
 	grantStore := agentruntime.NewMemoryOperationGrantStore()
-	dispatcher := agentruntime.NewCommandDispatcherWithGrant(api, power.NewController(), commandStore, executor, grantStore)
+	recoveryStore := terminalpkg.NewFileRecoveryStore(filepath.Join(filepath.Dir(*configPath), "terminal-recovery.json"))
+	terminalManager, err := terminalpkg.NewManager(recoveryStore, terminalpkg.NewRunner(api, cfg.Development), api)
+	if err != nil {
+		fail("terminal manager initialization failed", err)
+	}
+	if _, err := terminalManager.RetryRecovery(context.Background()); err != nil {
+		fail("terminal recovery failed", err)
+	}
+	dispatcher := agentruntime.NewCommandDispatcherWithGrantAndTerminal(api, power.NewController(), commandStore, executor, grantStore, terminalManager)
 	agent := agentruntime.NewAgentWithGrantStore(cfg.AgentID, version, gatherer, api, dispatcher, grantStore)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	defer terminalManager.Close(context.Background(), "agent-shutdown")
 	if err := agent.Run(ctx); err != nil {
 		fail("agent runtime stopped", err)
 	}
