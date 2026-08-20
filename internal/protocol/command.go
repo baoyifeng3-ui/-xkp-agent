@@ -22,12 +22,16 @@ const MaxCommandBytes = 4096
 type CommandType string
 
 const (
-	ShutdownServer             CommandType = "SHUTDOWN_SERVER"
-	CreateTrainingEnvironment  CommandType = "CREATE_TRAINING_ENVIRONMENT"
-	StartTrainingEnvironment   CommandType = "START_TRAINING_ENVIRONMENT"
-	StopTrainingEnvironment    CommandType = "STOP_TRAINING_ENVIRONMENT"
-	RestoreTrainingEnvironment CommandType = "RESTORE_TRAINING_ENVIRONMENT"
-	OpenRootTerminal           CommandType = "OPEN_ROOT_TERMINAL"
+	ShutdownServer                CommandType = "SHUTDOWN_SERVER"
+	CreateTrainingEnvironment     CommandType = "CREATE_TRAINING_ENVIRONMENT"
+	StartTrainingEnvironment      CommandType = "START_TRAINING_ENVIRONMENT"
+	StopTrainingEnvironment       CommandType = "STOP_TRAINING_ENVIRONMENT"
+	RestoreTrainingEnvironment    CommandType = "RESTORE_TRAINING_ENVIRONMENT"
+	CreateCompetitionEnvironment  CommandType = "CREATE_COMPETITION_ENVIRONMENT"
+	StartCompetitionEnvironment   CommandType = "START_COMPETITION_ENVIRONMENT"
+	StopCompetitionEnvironment    CommandType = "STOP_COMPETITION_ENVIRONMENT"
+	RestoreCompetitionEnvironment CommandType = "RESTORE_COMPETITION_ENVIRONMENT"
+	OpenRootTerminal              CommandType = "OPEN_ROOT_TERMINAL"
 )
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
@@ -152,8 +156,7 @@ func DecodeCommandAt(data []byte, now time.Time, allowInsecureLoopback bool) (Co
 		command.Terminal = &terminal
 		return command, nil
 	}
-	if command.Type != CreateTrainingEnvironment && command.Type != RestoreTrainingEnvironment &&
-		command.Type != StartTrainingEnvironment && command.Type != StopTrainingEnvironment {
+	if !isEnvironmentCommandType(command.Type) {
 		return Command{}, fmt.Errorf("command type or version is unsupported")
 	}
 	var environment EnvironmentPayload
@@ -300,7 +303,8 @@ func validateEnvironment(commandType CommandType, payload EnvironmentPayload) er
 	if !uuidPattern.MatchString(payload.EnvironmentID) || !uuidPattern.MatchString(payload.OperationID) {
 		return fmt.Errorf("environment identifiers are invalid")
 	}
-	full := commandType == CreateTrainingEnvironment || commandType == RestoreTrainingEnvironment
+	full := commandType == CreateTrainingEnvironment || commandType == RestoreTrainingEnvironment ||
+		commandType == CreateCompetitionEnvironment || commandType == RestoreCompetitionEnvironment
 	if full {
 		if !validRelativeWorkspace(payload.WorkspaceRelativePath) {
 			return fmt.Errorf("workspace path is invalid")
@@ -355,6 +359,16 @@ func validateEnvironment(commandType CommandType, payload EnvironmentPayload) er
 		return fmt.Errorf("annotation and editor components are required")
 	}
 	return nil
+}
+
+func isEnvironmentCommandType(commandType CommandType) bool {
+	switch commandType {
+	case CreateTrainingEnvironment, StartTrainingEnvironment, StopTrainingEnvironment, RestoreTrainingEnvironment,
+		CreateCompetitionEnvironment, StartCompetitionEnvironment, StopCompetitionEnvironment, RestoreCompetitionEnvironment:
+		return true
+	default:
+		return false
+	}
 }
 
 func validRelativeWorkspace(value string) bool {

@@ -205,11 +205,17 @@ func (d *CommandDispatcher) dispatchTerminal(ctx context.Context, command protoc
 func isEnvironmentCommand(commandType protocol.CommandType) bool {
 	switch commandType {
 	case protocol.CreateTrainingEnvironment, protocol.StartTrainingEnvironment,
-		protocol.StopTrainingEnvironment, protocol.RestoreTrainingEnvironment:
+		protocol.StopTrainingEnvironment, protocol.RestoreTrainingEnvironment,
+		protocol.CreateCompetitionEnvironment, protocol.StartCompetitionEnvironment,
+		protocol.StopCompetitionEnvironment, protocol.RestoreCompetitionEnvironment:
 		return true
 	default:
 		return false
 	}
+}
+
+func isEnvironmentStop(commandType protocol.CommandType) bool {
+	return commandType == protocol.StopTrainingEnvironment || commandType == protocol.StopCompetitionEnvironment
 }
 
 func (d *CommandDispatcher) dispatchEnvironment(ctx context.Context, command protocol.Command) error {
@@ -255,7 +261,7 @@ func (d *CommandDispatcher) dispatchEnvironment(ctx context.Context, command pro
 }
 
 func (d *CommandDispatcher) executeEnvironment(ctx context.Context, command protocol.Command) (protocol.CommandResult, error) {
-	if command.Type != protocol.StopTrainingEnvironment && d.grant != nil &&
+	if !isEnvironmentStop(command.Type) && d.grant != nil &&
 		!d.grant.Current().Valid(time.Now().UTC()) {
 		err := fmt.Errorf("environment operation grant is missing, denied, or expired")
 		return protocol.CommandResult{Success: false, Code: "ENVIRONMENT_OPERATION_NOT_GRANTED",
@@ -266,11 +272,19 @@ func (d *CommandDispatcher) executeEnvironment(ctx context.Context, command prot
 	switch command.Type {
 	case protocol.CreateTrainingEnvironment:
 		pair, err = d.executor.CreatePair(ctx, *command.Environment)
+	case protocol.CreateCompetitionEnvironment:
+		pair, err = d.executor.CreatePair(ctx, *command.Environment)
 	case protocol.StartTrainingEnvironment:
+		pair, err = d.executor.StartPair(ctx, *command.Environment)
+	case protocol.StartCompetitionEnvironment:
 		pair, err = d.executor.StartPair(ctx, *command.Environment)
 	case protocol.StopTrainingEnvironment:
 		pair, err = d.executor.StopPair(ctx, *command.Environment)
+	case protocol.StopCompetitionEnvironment:
+		pair, err = d.executor.StopPair(ctx, *command.Environment)
 	case protocol.RestoreTrainingEnvironment:
+		pair, err = d.executor.RestorePair(ctx, *command.Environment)
+	case protocol.RestoreCompetitionEnvironment:
 		pair, err = d.executor.RestorePair(ctx, *command.Environment)
 	default:
 		return protocol.CommandResult{Success: false, Code: "ENVIRONMENT_COMMAND_UNSUPPORTED"}, fmt.Errorf("unsupported environment command")
@@ -283,10 +297,14 @@ func (d *CommandDispatcher) executeEnvironment(ctx context.Context, command prot
 		return protocol.CommandResult{Success: false, Code: code, Message: boundedPlainMessage(err.Error())}, err
 	}
 	code := map[protocol.CommandType]string{
-		protocol.CreateTrainingEnvironment:  "ENVIRONMENT_CREATED",
-		protocol.StartTrainingEnvironment:   "ENVIRONMENT_STARTED",
-		protocol.StopTrainingEnvironment:    "ENVIRONMENT_STOPPED",
-		protocol.RestoreTrainingEnvironment: "ENVIRONMENT_RESTORED",
+		protocol.CreateTrainingEnvironment:     "ENVIRONMENT_CREATED",
+		protocol.CreateCompetitionEnvironment:  "ENVIRONMENT_CREATED",
+		protocol.StartTrainingEnvironment:      "ENVIRONMENT_STARTED",
+		protocol.StartCompetitionEnvironment:   "ENVIRONMENT_STARTED",
+		protocol.StopTrainingEnvironment:       "ENVIRONMENT_STOPPED",
+		protocol.StopCompetitionEnvironment:    "ENVIRONMENT_STOPPED",
+		protocol.RestoreTrainingEnvironment:    "ENVIRONMENT_RESTORED",
+		protocol.RestoreCompetitionEnvironment: "ENVIRONMENT_RESTORED",
 	}[command.Type]
 	return protocol.CommandResult{Success: true, Code: code, Message: "environment operation completed", Details: map[string]interface{}{"pair": pair}}, nil
 }

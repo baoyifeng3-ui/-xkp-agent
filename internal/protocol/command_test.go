@@ -136,6 +136,66 @@ func TestDecodeCommandAcceptsSharedEnvironmentFixtures(t *testing.T) {
 	}
 }
 
+func TestDecodeCommandAcceptsSharedCompetitionEnvironmentFixtures(t *testing.T) {
+	tests := []struct {
+		name     string
+		typeName CommandType
+		full     bool
+	}{
+		{"create", CreateCompetitionEnvironment, true},
+		{"restore", RestoreCompetitionEnvironment, true},
+		{"start", StartCompetitionEnvironment, false},
+		{"stop", StopCompetitionEnvironment, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data, err := os.ReadFile("../../testdata/command-" + test.name + "-competition-environment-v1.json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			command, err := DecodeCommand(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if command.Type != test.typeName || command.Environment == nil {
+				t.Fatalf("command = %#v", command)
+			}
+			if len(command.Environment.Components) != 2 {
+				t.Fatalf("components = %d", len(command.Environment.Components))
+			}
+			if test.full && command.Environment.WorkspaceRelativePath != "training/7/101" {
+				t.Fatalf("workspace = %q", command.Environment.WorkspaceRelativePath)
+			}
+		})
+	}
+}
+
+func TestDecodeCompetitionFixtureRetainsEnvelopeSafetyRules(t *testing.T) {
+	fixture, err := os.ReadFile("../../testdata/command-create-competition-environment-v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := string(fixture)
+	tests := []struct {
+		name string
+		body []byte
+	}{
+		{"unknown field", []byte(strings.Replace(valid, `"version":1`, `"version":1,"shell":"poweroff"`, 1))},
+		{"duplicate field", []byte(strings.Replace(valid, `"version":1`, `"version":1,"version":1`, 1))},
+		{"trailing JSON", append(fixture, []byte(` {}`)...)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := DecodeCommand(test.body); err == nil {
+				t.Fatal("expected competition envelope rejection")
+			}
+		})
+	}
+	if _, err := DecodeCommand(append(fixture, []byte(strings.Repeat(" ", MaxCommandBytes))...)); err == nil {
+		t.Fatal("expected oversized competition envelope rejection")
+	}
+}
+
 func TestDecodeCommandRejectsUnsafeEnvironmentPayloads(t *testing.T) {
 	data, err := os.ReadFile("../../testdata/command-create-training-environment-v1.json")
 	if err != nil {

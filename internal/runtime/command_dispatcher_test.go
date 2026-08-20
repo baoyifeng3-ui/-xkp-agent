@@ -383,6 +383,63 @@ func TestDispatcherRoutesEveryEnvironmentOperation(t *testing.T) {
 	}
 }
 
+func TestDispatcherRoutesEveryCompetitionEnvironmentOperation(t *testing.T) {
+	tests := []struct {
+		fixture string
+		want    string
+		code    string
+	}{
+		{"create", "create", "ENVIRONMENT_CREATED"},
+		{"start", "start-environment", "ENVIRONMENT_STARTED"},
+		{"stop", "stop-environment", "ENVIRONMENT_STOPPED"},
+		{"restore", "restore", "ENVIRONMENT_RESTORED"},
+	}
+	for _, test := range tests {
+		t.Run(test.fixture, func(t *testing.T) {
+			transport := &commandTransportStub{}
+			power := &powerStub{order: &transport.order}
+			executor := &environmentExecutorStub{order: &transport.order}
+			dispatcher := NewCommandDispatcherWithExecutor(transport, power, &memoryCommandStore{}, executor)
+			if err := dispatcher.Dispatch(context.Background(), competitionEnvironmentCommand(t, test.fixture)); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(transport.order, []string{"start", test.want, "result"}) || transport.lastResult.Code != test.code {
+				t.Fatalf("order=%v result=%#v", transport.order, transport.lastResult)
+			}
+		})
+	}
+}
+
+func TestDispatcherAlwaysAllowsCompetitionStopWhenGrantExpired(t *testing.T) {
+	transport := &commandTransportStub{}
+	power := &powerStub{order: &transport.order}
+	executor := &environmentExecutorStub{order: &transport.order}
+	grant := NewMemoryOperationGrantStore()
+	grant.Update(OperationGrant{Allowed: false, ExpiresAt: time.Now().UTC().Add(-time.Minute)})
+	dispatcher := NewCommandDispatcherWithGrant(transport, power, &memoryCommandStore{}, executor, grant)
+
+	if err := dispatcher.Dispatch(context.Background(), competitionEnvironmentCommand(t, "stop")); err != nil {
+		t.Fatal(err)
+	}
+	if executor.calls != 1 || transport.lastResult.Code != "ENVIRONMENT_STOPPED" {
+		t.Fatalf("calls=%d result=%#v", executor.calls, transport.lastResult)
+	}
+}
+
+func TestDispatcherRejectsCompetitionCreateWhenGrantExpired(t *testing.T) {
+	transport := &commandTransportStub{}
+	power := &powerStub{order: &transport.order}
+	executor := &environmentExecutorStub{order: &transport.order}
+	grant := NewMemoryOperationGrantStore()
+	grant.Update(OperationGrant{Allowed: true, ExpiresAt: time.Now().UTC().Add(-time.Second)})
+	dispatcher := NewCommandDispatcherWithGrant(transport, power, &memoryCommandStore{}, executor, grant)
+
+	err := dispatcher.Dispatch(context.Background(), competitionEnvironmentCommand(t, "create"))
+	if err == nil || executor.calls != 0 || transport.lastResult.Code != "ENVIRONMENT_OPERATION_NOT_GRANTED" {
+		t.Fatalf("error=%v calls=%d result=%#v", err, executor.calls, transport.lastResult)
+	}
+}
+
 func TestDispatcherReportsEnvironmentFailure(t *testing.T) {
 	transport := &commandTransportStub{}
 	power := &powerStub{order: &transport.order}
@@ -462,6 +519,19 @@ func shutdownCommand() protocol.Command {
 func environmentCommand(t *testing.T, operation string) protocol.Command {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "command-"+operation+"-training-environment-v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := protocol.DecodeCommand(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return command
+}
+
+func competitionEnvironmentCommand(t *testing.T, operation string) protocol.Command {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "command-"+operation+"-competition-environment-v1.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
