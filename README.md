@@ -5,6 +5,16 @@ NVIDIA GPU, Docker, and environment status to the XKP5.0 management server.
 
 Build with Go 1.22 or the repository Docker workflow, then install on Ubuntu:
 
+For the simplest installation, copy the complete repository to the processing server,
+copy `ca.crt` into `deploy/ca.crt`, and run:
+
+```bash
+sudo bash deploy/one-click-install.sh
+```
+
+The script prompts for the management URL, server name, workspace, and one-time
+registration credential. It installs missing polkit packages and starts the systemd service.
+
 ```bash
 sudo ./deploy/install.sh \
   --binary ./dist/xkp-agent-linux-amd64 \
