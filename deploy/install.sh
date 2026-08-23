@@ -20,7 +20,9 @@ done
 source /etc/os-release
 [[ ${ID:-} == ubuntu ]] || die 'Production installation requires Ubuntu (ID=ubuntu)'
 [[ $(uname -m) == x86_64 ]] || die 'Production installation requires amd64/x86_64'
-[[ -f "$binary" && -x "$binary" ]] || die 'Agent binary is missing or not executable'
+[[ -f "$binary" ]] || die 'Agent binary is missing or not executable'
+chmod 0755 "$binary"
+[[ -x "$binary" ]] || die 'Agent binary is missing or not executable'
 [[ -f "$ca_file" ]] || die 'CA certificate is missing'
 [[ "$management_url" == https://* ]] || die 'Management URL must use HTTPS'
 [[ "$workspace" == /* ]] || die 'Workspace must be absolute'
