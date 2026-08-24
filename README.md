@@ -37,9 +37,11 @@ Agent identity unless both `--purge-identity` and `--confirm-purge` are supplied
 ```bash
 go test -race ./...
 go vet ./...
-GOOS=linux GOARCH=amd64 go build -trimpath -o dist/xkp-agent-linux-amd64 ./cmd/xkp-agent
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o dist/xkp-agent-linux-amd64 ./cmd/xkp-agent
 sha256sum dist/xkp-agent-linux-amd64
 ```
+
+`CGO_ENABLED=0` is required. The production binary must be statically linked so it runs on Ubuntu 20.04 and newer without requiring the build host's glibc version.
 
 Windows is supported for development builds only. Production requires Ubuntu
 22.04 amd64, systemd, Docker Engine, the NVIDIA driver/NVML for GPU metrics, and a
