@@ -18,7 +18,10 @@ command -v nvidia-smi >/dev/null || die '未找到 NVIDIA 驱动工具'
 install -d -m 0755 /etc/polkit-1/rules.d
 if ! dpkg -s policykit-1 >/dev/null 2>&1; then
   apt-get update
-  DEBIAN_FRONTEND=noninteractive apt-get install -y policykit-1 polkitd
+  DEBIAN_FRONTEND=noninteractive apt-get install -y policykit-1
+  if apt-cache show polkitd >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive apt-get install -y polkitd
+  fi
 fi
 printf '管理平台地址 [https://172.16.33.182:19443]: '; read -r management_url
 management_url=${management_url:-https://172.16.33.182:19443}
