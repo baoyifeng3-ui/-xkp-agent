@@ -19,7 +19,7 @@ install -d -m 0755 /etc/polkit-1/rules.d
 if ! dpkg -s policykit-1 >/dev/null 2>&1; then
   apt-get update
   DEBIAN_FRONTEND=noninteractive apt-get install -y policykit-1
-  if apt-cache show polkitd >/dev/null 2>&1; then
+  if apt-cache show polkitd 2>/dev/null | grep -q '^Package: polkitd$'; then
     DEBIAN_FRONTEND=noninteractive apt-get install -y polkitd
   fi
 fi
