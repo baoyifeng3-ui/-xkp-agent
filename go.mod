@@ -4,7 +4,6 @@ go 1.22
 
 require (
 	github.com/creack/pty v1.1.24
-	github.com/NVIDIA/go-nvml v0.13.0-1
 	github.com/docker/docker v24.0.9+incompatible
 	github.com/gorilla/websocket v1.5.3
 	github.com/shirou/gopsutil/v4 v4.24.12
