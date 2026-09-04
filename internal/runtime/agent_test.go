@@ -25,6 +25,7 @@ type fakeTransport struct {
 	commands  []json.RawMessage
 	polls     int
 	grant     OperationGrant
+	events    []string
 }
 
 func (f *fakeTransport) Heartbeat(ctx context.Context, request HeartbeatRequest) (HeartbeatAck, error) {
@@ -34,6 +35,7 @@ func (f *fakeTransport) Heartbeat(ctx context.Context, request HeartbeatRequest)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.events = append(f.events, "heartbeat")
 	f.sequences = append(f.sequences, request.Sequence)
 	if f.fail {
 		f.fail = false
@@ -74,11 +76,32 @@ func TestFailedHeartbeatDoesNotExtendEnvironmentOperationGrant(t *testing.T) {
 }
 func (f *fakeTransport) PollCommands(ctx context.Context, _ int) ([]json.RawMessage, error) {
 	f.polls++
+	f.events = append(f.events, "poll")
 	if f.block {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
 	return f.commands, nil
+}
+
+func TestProcessCommandsRefreshesExpiredGrantBeforePolling(t *testing.T) {
+	expiresAt := time.Now().UTC().Add(time.Minute)
+	transport := &fakeTransport{accepted: true,
+		grant: OperationGrant{Allowed: true, ExpiresAt: expiresAt}}
+	store := NewMemoryOperationGrantStore()
+	store.Update(OperationGrant{Allowed: true, ExpiresAt: time.Now().UTC().Add(-time.Minute)})
+	agent := NewAgentWithGrantStore("agent", "0.1.0", fakeGatherer{}, transport,
+		&commandHandlerStub{}, store)
+
+	if err := agent.processCommandsOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(transport.events) < 2 || transport.events[0] != "heartbeat" || transport.events[1] != "poll" {
+		t.Fatalf("events = %#v", transport.events)
+	}
+	if !store.Current().Valid(time.Now().UTC()) {
+		t.Fatalf("grant was not refreshed: %#v", store.Current())
+	}
 }
 
 type commandHandlerStub struct {

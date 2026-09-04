@@ -18,6 +18,7 @@ var (
 
 type Validator struct {
 	WorkspaceRoot string
+	CodeServerTLSDir string
 }
 
 func (v Validator) ValidateCreate(payload protocol.EnvironmentPayload) (string, error) {
@@ -33,8 +34,9 @@ func (v Validator) ValidateCreate(payload protocol.EnvironmentPayload) (string, 
 		if !imagePattern.MatchString(component.ImageReference) || component.RestartPolicy != "always" {
 			return "", fmt.Errorf("component image or restart policy is invalid")
 		}
-		if component.CPULimitMillis < 100 || component.CPULimitMillis > 128000 ||
-			component.MemoryLimitBytes < 128*1024*1024 || component.MemoryLimitBytes > 512*1024*1024*1024 {
+		cpuInvalid := component.CPULimitMillis != 0 && (component.CPULimitMillis < 100 || component.CPULimitMillis > 128000)
+		memoryInvalid := component.MemoryLimitBytes != 0 && (component.MemoryLimitBytes < 128*1024*1024 || component.MemoryLimitBytes > 512*1024*1024*1024)
+		if cpuInvalid || memoryInvalid {
 			return "", fmt.Errorf("component resources are invalid")
 		}
 		if component.ComponentType == "ANNOTATION" {
@@ -44,7 +46,8 @@ func (v Validator) ValidateCreate(payload protocol.EnvironmentPayload) (string, 
 		} else if component.RuntimeName != "nvidia" || component.MountTarget != "/home/student/data" {
 			return "", fmt.Errorf("editor component configuration is invalid")
 		}
-		if component.GPUEnabled && (component.GPUComputePercent < 1 || component.GPUComputePercent > 100) {
+		if component.GPUEnabled && component.GPUComputePercent != 0 &&
+			(component.GPUComputePercent < 1 || component.GPUComputePercent > 100) {
 			return "", fmt.Errorf("GPU limit is invalid")
 		}
 		if len(component.Ports) == 0 {
@@ -66,7 +69,7 @@ func (v Validator) ValidateCreate(payload protocol.EnvironmentPayload) (string, 
 			return "", fmt.Errorf("working directory is invalid")
 		}
 		for _, argument := range component.Command {
-			if argument == "" || len(argument) > 1024 || strings.ContainsRune(argument, '\x00') {
+			if argument == "" || len(argument) > 2048 || strings.ContainsRune(argument, '\x00') {
 				return "", fmt.Errorf("component command is invalid")
 			}
 		}

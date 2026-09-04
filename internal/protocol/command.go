@@ -27,11 +27,18 @@ const (
 	StartTrainingEnvironment      CommandType = "START_TRAINING_ENVIRONMENT"
 	StopTrainingEnvironment       CommandType = "STOP_TRAINING_ENVIRONMENT"
 	RestoreTrainingEnvironment    CommandType = "RESTORE_TRAINING_ENVIRONMENT"
+	DeleteTrainingEnvironment     CommandType = "DELETE_TRAINING_ENVIRONMENT"
 	CreateCompetitionEnvironment  CommandType = "CREATE_COMPETITION_ENVIRONMENT"
 	StartCompetitionEnvironment   CommandType = "START_COMPETITION_ENVIRONMENT"
 	StopCompetitionEnvironment    CommandType = "STOP_COMPETITION_ENVIRONMENT"
 	RestoreCompetitionEnvironment CommandType = "RESTORE_COMPETITION_ENVIRONMENT"
+	DeleteCompetitionEnvironment  CommandType = "DELETE_COMPETITION_ENVIRONMENT"
 	OpenRootTerminal              CommandType = "OPEN_ROOT_TERMINAL"
+	UpgradeAgent                  CommandType = "UPGRADE_AGENT"
+	ExecuteTerminalInput          CommandType = "EXECUTE_TERMINAL_INPUT"
+	DeployImage                   CommandType = "DEPLOY_IMAGE"
+	TransferFile                  CommandType = "TRANSFER_FILE"
+	ModelWorkspace                CommandType = "MODEL_WORKSPACE"
 )
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
@@ -39,14 +46,53 @@ var canonicalUUIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-
 var canonicalTimePattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$`)
 
 type Command struct {
-	CommandID      string              `json:"commandId"`
-	Type           CommandType         `json:"type"`
-	Version        int                 `json:"version"`
-	LeaseToken     string              `json:"leaseToken"`
-	LeaseExpiresAt time.Time           `json:"leaseExpiresAt"`
-	Payload        json.RawMessage     `json:"payload"`
-	Environment    *EnvironmentPayload `json:"-"`
-	Terminal       *TerminalPayload    `json:"-"`
+	CommandID       string                  `json:"commandId"`
+	Type            CommandType             `json:"type"`
+	Version         int                     `json:"version"`
+	LeaseToken      string                  `json:"leaseToken"`
+	LeaseExpiresAt  time.Time               `json:"leaseExpiresAt"`
+	Payload         json.RawMessage         `json:"payload"`
+	Environment     *EnvironmentPayload     `json:"-"`
+	Terminal        *TerminalPayload        `json:"-"`
+	Upgrade         *UpgradePayload         `json:"-"`
+	TerminalInput   *TerminalInputPayload   `json:"-"`
+	ImageDeployment *ImageDeploymentPayload `json:"-"`
+	FileTransfer    *FileTransferPayload    `json:"-"`
+	ModelWorkspace  *ModelWorkspacePayload  `json:"-"`
+}
+
+type FileTransferPayload struct {
+	DownloadPath       string `json:"downloadPath"`
+	TargetRelativePath string `json:"targetRelativePath"`
+	SHA256             string `json:"sha256"`
+}
+
+type ModelWorkspacePayload struct {
+	Action        string `json:"action"`
+	ContainerName string `json:"containerName"`
+	ModelPath     string `json:"modelPath"`
+	ConfigPath    string `json:"configPath"`
+	Overwrite     bool   `json:"overwrite"`
+}
+
+type ImageDeploymentPayload struct {
+	AgentID        string `json:"agentId"`
+	DeploymentID   string `json:"deploymentId"`
+	ComponentType  string `json:"componentType"`
+	RegistryDigest string `json:"registryDigest"`
+	UpdatePolicy   string `json:"updatePolicy"`
+	IdempotencyKey string `json:"idempotencyKey"`
+}
+
+type UpgradePayload struct {
+	TargetVersion string `json:"targetVersion"`
+	DownloadPath  string `json:"downloadPath"`
+	SHA256        string `json:"sha256"`
+}
+
+type TerminalInputPayload struct {
+	SessionID string `json:"sessionId"`
+	Data      string `json:"data"`
 }
 
 type TerminalPayload struct {
@@ -78,6 +124,7 @@ type EnvironmentComponent struct {
 	CPULimitMillis      int               `json:"cpuLimitMillis,omitempty"`
 	MemoryLimitBytes    int64             `json:"memoryLimitBytes,omitempty"`
 	GPUEnabled          bool              `json:"gpuEnabled,omitempty"`
+	MPSEnabled          bool              `json:"mpsEnabled,omitempty"`
 	GPUComputePercent   int               `json:"gpuComputePercent,omitempty"`
 	GPUMemoryLimitBytes int64             `json:"gpuMemoryLimitBytes,omitempty"`
 }
@@ -120,11 +167,65 @@ func DecodeCommandAt(data []byte, now time.Time, allowInsecureLoopback bool) (Co
 	if command.Type == OpenRootTerminal {
 		identifierPattern = canonicalUUIDPattern
 	}
+	if command.Type == UpgradeAgent {
+		var upgrade UpgradePayload
+		if err := decodeStrict(command.Payload, &upgrade); err != nil {
+			return Command{}, fmt.Errorf("decode upgrade payload: %w", err)
+		}
+		if !regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`).MatchString(upgrade.TargetVersion) ||
+			upgrade.DownloadPath != "/agent/v1/upgrade-binary" ||
+			!regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(upgrade.SHA256) {
+			return Command{}, fmt.Errorf("upgrade payload is invalid")
+		}
+		command.Upgrade = &upgrade
+		return command, nil
+	}
+	if command.Type == ExecuteTerminalInput {
+		var input TerminalInputPayload
+		if err := decodeStrict(command.Payload, &input); err != nil || !uuidPattern.MatchString(input.SessionID) ||
+			len(input.Data) == 0 || len(input.Data) > 4096 || strings.IndexByte(input.Data, 0) >= 0 {
+			return Command{}, fmt.Errorf("terminal input payload is invalid")
+		}
+		command.TerminalInput = &input
+		return command, nil
+	}
 	if !identifierPattern.MatchString(command.CommandID) || !identifierPattern.MatchString(command.LeaseToken) {
 		return Command{}, fmt.Errorf("command identifiers are invalid")
 	}
 	if command.Version != 1 {
 		return Command{}, fmt.Errorf("command type or version is unsupported")
+	}
+	if command.Type == DeployImage {
+		var deployment ImageDeploymentPayload
+		if err := decodeStrict(command.Payload, &deployment); err != nil ||
+			!uuidPattern.MatchString(deployment.AgentID) || !uuidPattern.MatchString(deployment.DeploymentID) ||
+			(deployment.ComponentType != "ANNOTATION" && deployment.ComponentType != "EDITOR") ||
+			!regexp.MustCompile(`^sha256:[0-9a-f]{64}$`).MatchString(deployment.RegistryDigest) ||
+			(deployment.UpdatePolicy != "IMAGE_ONLY" && deployment.UpdatePolicy != "UPDATE_CONTAINERS") ||
+			len(deployment.IdempotencyKey) == 0 || len(deployment.IdempotencyKey) > 128 {
+			return Command{}, fmt.Errorf("image deployment payload is invalid")
+		}
+		command.ImageDeployment = &deployment
+		return command, nil
+	}
+	if command.Type == TransferFile {
+		var transfer FileTransferPayload
+		if err := decodeStrict(command.Payload, &transfer); err != nil || !strings.HasPrefix(transfer.DownloadPath, "/agent/v1/files/") || transfer.TargetRelativePath == "" || path.IsAbs(transfer.TargetRelativePath) || strings.Contains(transfer.TargetRelativePath, "..") || !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(transfer.SHA256) {
+			return Command{}, fmt.Errorf("file transfer payload is invalid")
+		}
+		command.FileTransfer = &transfer
+		return command, nil
+	}
+	if command.Type == ModelWorkspace {
+		var workspace ModelWorkspacePayload
+		if err := decodeStrict(command.Payload, &workspace); err != nil || !validContainerName(workspace.ContainerName) ||
+			(workspace.Action != "LIST" && workspace.Action != "DEPLOY") ||
+			(workspace.Action == "LIST" && (workspace.ModelPath != "" || workspace.ConfigPath != "" || workspace.Overwrite)) ||
+			(workspace.Action == "DEPLOY" && (!validModelPath(workspace.ModelPath) || !validModelPath(workspace.ConfigPath))) {
+			return Command{}, fmt.Errorf("model workspace payload is invalid")
+		}
+		command.ModelWorkspace = &workspace
+		return command, nil
 	}
 	if command.LeaseExpiresAt.IsZero() {
 		return Command{}, fmt.Errorf("command lease expiry is required")
@@ -312,8 +413,8 @@ func validateEnvironment(commandType CommandType, payload EnvironmentPayload) er
 	} else if payload.WorkspaceRelativePath != "" {
 		return fmt.Errorf("workspace is not allowed for this command")
 	}
-	if len(payload.Components) != 2 {
-		return fmt.Errorf("environment must contain two components")
+	if len(payload.Components) < 1 || len(payload.Components) > 2 {
+		return fmt.Errorf("environment must contain one or two components")
 	}
 	seenTypes := map[string]bool{}
 	seenHosts := map[string]bool{}
@@ -329,8 +430,12 @@ func validateEnvironment(commandType CommandType, payload EnvironmentPayload) er
 			return fmt.Errorf("component identity is invalid")
 		}
 		if full {
-			if component.ImageReference == "" || component.RestartPolicy != "always" || component.CPULimitMillis < 100 || component.CPULimitMillis > 128000 || component.MemoryLimitBytes < 128*1024*1024 || component.MemoryLimitBytes > 512*1024*1024*1024 {
-				return fmt.Errorf("component resources are invalid")
+			cpuInvalid := component.CPULimitMillis != 0 && (component.CPULimitMillis < 100 || component.CPULimitMillis > 128000)
+			memoryInvalid := component.MemoryLimitBytes != 0 && (component.MemoryLimitBytes < 128*1024*1024 || component.MemoryLimitBytes > 512*1024*1024*1024)
+			if component.ImageReference == "" || component.RestartPolicy != "always" || cpuInvalid || memoryInvalid {
+				return fmt.Errorf("component resources are invalid: type=%s cpu=%d memory=%d image=%t restart=%s",
+					component.ComponentType, component.CPULimitMillis, component.MemoryLimitBytes,
+					component.ImageReference != "", component.RestartPolicy)
 			}
 			if component.ComponentType == "ANNOTATION" && (component.RuntimeName != "sysbox-runc" || component.MountTarget != "/root/data") {
 				return fmt.Errorf("annotation component configuration is invalid")
@@ -348,15 +453,14 @@ func validateEnvironment(commandType CommandType, payload EnvironmentPayload) er
 				}
 				seenHosts[key] = true
 			}
-			if component.GPUEnabled && (component.GPUComputePercent < 1 || component.GPUComputePercent > 100) {
+			// GPU can be enabled without an MPS quota; validate the quota only when set.
+			if component.GPUEnabled && component.GPUComputePercent != 0 &&
+				(component.GPUComputePercent < 1 || component.GPUComputePercent > 100) {
 				return fmt.Errorf("GPU limit is invalid")
 			}
 		} else if len(component.Ports) != 0 || component.ImageReference != "" || component.RuntimeName != "" || component.MountTarget != "" {
 			return fmt.Errorf("start or stop contains create fields")
 		}
-	}
-	if !seenTypes["ANNOTATION"] || !seenTypes["EDITOR"] {
-		return fmt.Errorf("annotation and editor components are required")
 	}
 	return nil
 }
@@ -364,7 +468,8 @@ func validateEnvironment(commandType CommandType, payload EnvironmentPayload) er
 func isEnvironmentCommandType(commandType CommandType) bool {
 	switch commandType {
 	case CreateTrainingEnvironment, StartTrainingEnvironment, StopTrainingEnvironment, RestoreTrainingEnvironment,
-		CreateCompetitionEnvironment, StartCompetitionEnvironment, StopCompetitionEnvironment, RestoreCompetitionEnvironment:
+		DeleteTrainingEnvironment, CreateCompetitionEnvironment, StartCompetitionEnvironment,
+		StopCompetitionEnvironment, RestoreCompetitionEnvironment, DeleteCompetitionEnvironment:
 		return true
 	default:
 		return false
@@ -378,6 +483,10 @@ func validRelativeWorkspace(value string) bool {
 
 func validContainerName(value string) bool {
 	return len(value) >= 3 && len(value) <= 128 && !strings.ContainsAny(value, " /\\")
+}
+func validModelPath(value string) bool {
+	return value != "" && !path.IsAbs(value) && path.Clean(value) == value && value != "." && value != ".." &&
+		!strings.HasPrefix(value, "../") && !strings.Contains(value, "\\") && !strings.ContainsRune(value, '\x00')
 }
 func validFingerprint(value string) bool {
 	return len(value) == 64 && regexp.MustCompile(`^[0-9a-fA-F]+$`).MatchString(value)

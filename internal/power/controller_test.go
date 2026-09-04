@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -11,6 +12,13 @@ type recordingRunner struct {
 	name string
 	args []string
 	err  error
+}
+
+type sequenceRunner struct { calls []string; failures int }
+func (r *sequenceRunner) Run(_ context.Context, name string, args ...string) error {
+	r.calls = append(r.calls, name+" "+strings.Join(args, " "))
+	if len(r.calls) <= r.failures { return errors.New("exit status 1") }
+	return nil
 }
 
 func (r *recordingRunner) Run(_ context.Context, name string, args ...string) error {
@@ -32,9 +40,17 @@ func TestLinuxControllerRunsExactSystemctlPoweroff(t *testing.T) {
 }
 
 func TestLinuxControllerPropagatesRunnerFailure(t *testing.T) {
-	runner := &recordingRunner{err: errors.New("permission denied")}
+	runner := &sequenceRunner{failures: 4}
 	if err := NewLinuxController(runner).Shutdown(context.Background()); err == nil {
 		t.Fatal("expected poweroff failure")
+	}
+}
+
+func TestLinuxControllerFallsBackToSystemctl(t *testing.T) {
+	runner := &sequenceRunner{failures: 1}
+	if err := NewLinuxController(runner).Shutdown(context.Background()); err != nil { t.Fatal(err) }
+	if !reflect.DeepEqual(runner.calls, []string{"/usr/bin/loginctl poweroff", "/usr/bin/systemctl poweroff"}) {
+		t.Fatalf("calls = %#v", runner.calls)
 	}
 }
 

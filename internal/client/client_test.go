@@ -206,6 +206,18 @@ func TestCommandClientRejectsPathInjectionIdentifiersBeforeRequest(t *testing.T)
 	}
 }
 
+func TestFinishCommandTreatsConflictAsIdempotentSuccess(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/result") { t.Fatalf("path = %s", r.URL.Path) }
+		w.WriteHeader(http.StatusConflict)
+	}))
+	defer server.Close()
+	c := testClientWithClock(t, server.URL, time.Now)
+	err := c.FinishCommand(context.Background(), "77777777-7777-4777-8777-777777777777",
+		protocol.CommandResult{LeaseToken: "66666666-6666-4666-8666-666666666666"})
+	if err != nil { t.Fatal(err) }
+}
+
 func TestGenericCommandClientPreservesUppercaseUUIDCompatibility(t *testing.T) {
 	commandID := "abcdefab-cdef-4abc-8def-abcdefabcdef"
 	leaseToken := "abcdefab-cdef-4abc-8def-abcdefabcdef"

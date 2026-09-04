@@ -3,14 +3,15 @@ set -Eeuo pipefail
 umask 077
 
 usage() {
-  printf 'Usage: sudo install.sh --binary FILE --management-url URL --ca FILE --registration-token TOKEN --display-name NAME --workspace PATH\n'
+  printf 'Usage: sudo install.sh --binary FILE --management-url URL --ca FILE --code-server-cert FILE --code-server-key FILE --registration-token TOKEN --display-name NAME --workspace PATH\n'
 }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
-binary= management_url= ca_file= registration_token= display_name= workspace=
+binary= management_url= ca_file= code_server_cert= code_server_key= registration_token= display_name= workspace=
 while (($#)); do
   case "$1" in
     --binary) binary=${2:-}; shift 2;; --management-url) management_url=${2:-}; shift 2;;
     --ca) ca_file=${2:-}; shift 2;; --registration-token) registration_token=${2:-}; shift 2;;
+    --code-server-cert) code_server_cert=${2:-}; shift 2;; --code-server-key) code_server_key=${2:-}; shift 2;;
     --display-name) display_name=${2:-}; shift 2;; --workspace) workspace=${2:-}; shift 2;;
     -h|--help) usage; exit 0;; *) die "Unknown argument: $1";;
   esac
@@ -24,6 +25,7 @@ source /etc/os-release
 chmod 0755 "$binary"
 [[ -x "$binary" ]] || die 'Agent binary is missing or not executable'
 [[ -f "$ca_file" ]] || die 'CA certificate is missing'
+[[ -f "$code_server_cert" && -f "$code_server_key" ]] || die 'Code-server TLS leaf certificate or key is missing'
 [[ "$management_url" == https://* ]] || die 'Management URL must use HTTPS'
 [[ "$workspace" == /* ]] || die 'Workspace must be absolute'
 [[ -n "$registration_token" && -n "$display_name" ]] || die 'Registration token and display name are required'
@@ -36,8 +38,6 @@ docker_runtimes=$(docker info --format '{{json .Runtimes}}')
 [[ "$docker_runtimes" == *'nvidia'* ]] || die 'NVIDIA Container Runtime is required'
 command -v nvidia-smi >/dev/null || die 'NVIDIA driver tools are required'
 nvidia-smi >/dev/null 2>&1 || die 'NVIDIA GPU is unavailable'
-command -v loginctl >/dev/null || die 'loginctl is required for power control'
-[[ -d /etc/polkit-1/rules.d ]] || die 'polkit rules directory is missing; install polkit first'
 
 id xkp-agent >/dev/null 2>&1 || useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin xkp-agent
 for group_name in docker video render; do getent group "$group_name" >/dev/null && usermod -aG "$group_name" xkp-agent; done
@@ -47,8 +47,9 @@ environment_workspace=$workspace/environments
 install -d -m 0750 -o xkp-agent -g xkp-agent "$environment_workspace"
 install -m 0755 "$binary" /usr/local/bin/xkp-agent
 install -m 0644 "$ca_file" /etc/xkp-agent/ca.crt
-install -m 0644 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/xkp-agent-power.rules" \
-  /etc/polkit-1/rules.d/60-xkp-agent-power.rules
+install -d -m 0700 -o root -g root /etc/xkp-agent/code-server-tls
+install -m 0644 -o root -g root "$code_server_cert" /etc/xkp-agent/code-server-tls/code-cert.pem
+install -m 0600 -o root -g root "$code_server_key" /etc/xkp-agent/code-server-tls/code-cert-key.pem
 install -m 0600 -o xkp-agent -g xkp-agent /dev/null /etc/xkp-agent/agent.yml
 
 yaml_escape() { local value=${1//\\/\\\\}; value=${value//\"/\\\"}; printf '%s' "$value"; }
@@ -57,6 +58,7 @@ yaml_escape() { local value=${1//\\/\\\\}; value=${value//\"/\\\"}; printf '%s' 
   printf 'caCertificate: "/etc/xkp-agent/ca.crt"\n'
   printf 'workspacePath: "%s"\n' "$(yaml_escape "$workspace")"
   printf 'environmentWorkspaceRoot: "%s"\n' "$(yaml_escape "$environment_workspace")"
+  printf 'codeServerTLSDir: "/etc/xkp-agent/code-server-tls"\n'
 } > /etc/xkp-agent/agent.yml
 chown xkp-agent:xkp-agent /etc/xkp-agent/agent.yml
 chmod 0600 /etc/xkp-agent/agent.yml

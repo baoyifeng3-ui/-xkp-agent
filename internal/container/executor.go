@@ -15,9 +15,10 @@ const (
 )
 
 type ComponentResult struct {
-	ComponentType string `json:"componentType"`
-	ContainerName string `json:"containerName"`
-	State         State  `json:"state"`
+	ComponentType     string `json:"componentType"`
+	ContainerName     string `json:"containerName"`
+	ConfigFingerprint string `json:"configFingerprint"`
+	State             State  `json:"state"`
 }
 
 type PairResult struct {
@@ -31,4 +32,5 @@ type Executor interface {
 	StartPair(context.Context, protocol.EnvironmentPayload) (PairResult, error)
 	StopPair(context.Context, protocol.EnvironmentPayload) (PairResult, error)
 	RestorePair(context.Context, protocol.EnvironmentPayload) (PairResult, error)
+	DeletePair(context.Context, protocol.EnvironmentPayload) (PairResult, error)
 }

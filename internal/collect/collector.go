@@ -28,6 +28,8 @@ type Snapshot struct {
 	DockerVersion           string            `json:"dockerVersion,omitempty"`
 	RunningEnvironmentCount *int              `json:"runningEnvironmentCount"`
 	RunningContainerCount   *int              `json:"runningContainerCount"`
+	NetworkReceiveBytesPerSecond *int64        `json:"networkReceiveBytesPerSecond"`
+	NetworkSendBytesPerSecond    *int64        `json:"networkSendBytesPerSecond"`
 	CollectorErrors         map[string]string `json:"collectorErrors"`
 }
 
@@ -138,5 +140,11 @@ func merge(to *Snapshot, from Snapshot) {
 	}
 	if from.RunningContainerCount != nil {
 		to.RunningContainerCount = from.RunningContainerCount
+	}
+	if from.NetworkReceiveBytesPerSecond != nil {
+		to.NetworkReceiveBytesPerSecond = from.NetworkReceiveBytesPerSecond
+	}
+	if from.NetworkSendBytesPerSecond != nil {
+		to.NetworkSendBytesPerSecond = from.NetworkSendBytesPerSecond
 	}
 }

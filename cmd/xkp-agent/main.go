@@ -17,12 +17,16 @@ import (
 	"xkp-agent/internal/config"
 	containerexecutor "xkp-agent/internal/container"
 	"xkp-agent/internal/identity"
+	imagedeploypkg "xkp-agent/internal/imagedeploy"
+	modeldeploypkg "xkp-agent/internal/modeldeploy"
 	"xkp-agent/internal/power"
 	agentruntime "xkp-agent/internal/runtime"
 	terminalpkg "xkp-agent/internal/terminal"
+	transferpkg "xkp-agent/internal/transfer"
+	upgradepkg "xkp-agent/internal/upgrade"
 )
 
-const version = "0.1.0"
+const version = "0.2.28"
 
 func main() {
 	configPath := flag.String("config", "/etc/xkp-agent/config.yaml", "configuration file")
@@ -75,7 +79,7 @@ func main() {
 		return
 	}
 
-	gatherer := collect.NewMultiCollector(collect.NewSystemCollector(cfg.WorkspacePath), collect.NewNvidiaCollector(), collect.NewDockerCollector())
+	gatherer := collect.NewMultiCollector(collect.NewSystemCollector(cfg.WorkspacePath), collect.NewNvidiaCollector(), collect.NewDockerCollector(), collect.NewNetworkCollector())
 	commandStore := agentruntime.NewFileCommandStore(filepath.Join(filepath.Dir(*configPath),
 		"pending-command.json"))
 	dockerClient, err := dockerclient.NewClientWithOpts(dockerclient.FromEnv, dockerclient.WithAPIVersionNegotiation())
@@ -85,7 +89,8 @@ func main() {
 	defer dockerClient.Close()
 	executor := containerexecutor.NewDockerExecutor(dockerClient, containerexecutor.Validator{
 		WorkspaceRoot: cfg.EnvironmentWorkspaceRoot,
-	})
+		CodeServerTLSDir: cfg.CodeServerTLSDir,
+	}, containerexecutor.NewHostMPSManager(filepath.Join(cfg.WorkspacePath, "mps")))
 	grantStore := agentruntime.NewMemoryOperationGrantStore()
 	recoveryStore := terminalpkg.NewFileRecoveryStore(filepath.Join(filepath.Dir(*configPath), "terminal-recovery.json"))
 	terminalManager, err := terminalpkg.NewManager(recoveryStore, terminalpkg.NewRunner(api, cfg.Development), api)
@@ -96,6 +101,14 @@ func main() {
 		fail("terminal recovery failed", err)
 	}
 	dispatcher := agentruntime.NewCommandDispatcherWithGrantAndTerminal(api, power.NewController(), commandStore, executor, grantStore, terminalManager)
+	upgradeManager, err := upgradepkg.NewManager(api)
+	if err != nil {
+		fail("upgrade manager initialization failed", err)
+	}
+	dispatcher.SetUpgradeManager(upgradeManager)
+	dispatcher.SetImageDeploymentManager(imagedeploypkg.NewManager(api))
+	dispatcher.SetFileTransferManager(transferpkg.New(api, cfg.EnvironmentWorkspaceRoot))
+	dispatcher.SetModelWorkspaceManager(modeldeploypkg.New(modeldeploypkg.NewDockerRunner(dockerClient)))
 	agent := agentruntime.NewAgentWithGrantStore(cfg.AgentID, version, gatherer, api, dispatcher, grantStore)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

@@ -4,7 +4,9 @@ package power
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
+	"strings"
 )
 
 type linuxController struct {
@@ -23,7 +25,27 @@ func NewLinuxController(runner CommandRunner) Controller {
 }
 
 func (c *linuxController) Shutdown(ctx context.Context) error {
-	return c.runner.Run(ctx, "/usr/bin/loginctl", "poweroff")
+	commands := []struct {
+		name string
+		args []string
+	}{
+		{"/usr/bin/loginctl", []string{"poweroff"}},
+		{"/usr/bin/systemctl", []string{"poweroff"}},
+		{"/usr/sbin/shutdown", []string{"-h", "now"}},
+		{"/sbin/poweroff", nil},
+	}
+	var failures []string
+	for _, command := range commands {
+		if err := c.runner.Run(ctx, command.name, command.args...); err == nil {
+			return nil
+		} else {
+			failures = append(failures, command.name+": "+err.Error())
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+	}
+	return fmt.Errorf("all poweroff methods failed: %s", strings.Join(failures, "; "))
 }
 
 type execRunner struct{}

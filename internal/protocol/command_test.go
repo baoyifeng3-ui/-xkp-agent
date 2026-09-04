@@ -102,6 +102,26 @@ func TestDecodeCommandRejectsOversizedInput(t *testing.T) {
 	}
 }
 
+func TestDecodeCommandAcceptsModelWorkspaceActions(t *testing.T) {
+	for _, payload := range []string{
+		`{"action":"LIST","containerName":"xkp-train-editor","modelPath":"","configPath":"","overwrite":false}`,
+		`{"action":"DEPLOY","containerName":"xkp-train-editor","modelPath":"models/a.onnx","configPath":"models/a.json","overwrite":true}`,
+	} {
+		body := []byte(`{"commandId":"11111111-2222-4333-8444-555555555555","type":"MODEL_WORKSPACE","version":1,"leaseToken":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee","leaseExpiresAt":"2026-08-19T12:05:00Z","payload":` + payload + `}`)
+		command, err := DecodeCommand(body)
+		if err != nil || command.ModelWorkspace == nil {
+			t.Fatalf("payload=%s command=%#v error=%v", payload, command, err)
+		}
+	}
+}
+
+func TestDecodeCommandRejectsUnsafeModelWorkspacePaths(t *testing.T) {
+	body := []byte(`{"commandId":"11111111-2222-4333-8444-555555555555","type":"MODEL_WORKSPACE","version":1,"leaseToken":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee","leaseExpiresAt":"2026-08-19T12:05:00Z","payload":{"action":"DEPLOY","containerName":"xkp-train-editor","modelPath":"../secret","configPath":"a.json","overwrite":false}}`)
+	if _, err := DecodeCommand(body); err == nil {
+		t.Fatal("unsafe model path was accepted")
+	}
+}
+
 func TestDecodeCommandAcceptsSharedEnvironmentFixtures(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -133,6 +153,29 @@ func TestDecodeCommandAcceptsSharedEnvironmentFixtures(t *testing.T) {
 				t.Fatalf("workspace = %q", command.Environment.WorkspaceRelativePath)
 			}
 		})
+	}
+}
+
+func TestDecodeCreateEnvironmentAcceptsUnlimitedCPUAndMemory(t *testing.T) {
+	data, err := os.ReadFile("../../testdata/command-create-training-environment-v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope map[string]interface{}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	payload := envelope["payload"].(map[string]interface{})
+	components := payload["components"].([]interface{})
+	component := components[0].(map[string]interface{})
+	component["cpuLimitMillis"] = float64(0)
+	component["memoryLimitBytes"] = float64(0)
+	mutated, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeCommand(mutated); err != nil {
+		t.Fatalf("unlimited component rejected: %v", err)
 	}
 }
 

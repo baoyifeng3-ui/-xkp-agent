@@ -16,9 +16,12 @@ if grep -Eqi 'registration.?token|enrollment.?token|secret' "$unit"; then fail '
 grep -q 'install -m 0600' "$root/deploy/install.sh" || fail 'installer must create root-only configuration'
 grep -q 'ID=ubuntu' "$root/deploy/install.sh" || fail 'installer must require Ubuntu'
 grep -q 'x86_64' "$root/deploy/install.sh" || fail 'installer must require amd64'
-grep -q 'org.freedesktop.login1.power-off' "$root/deploy/xkp-agent-power.rules" || fail 'power policy missing'
-grep -q 'xkp-agent-power.rules' "$root/deploy/install.sh" || fail 'installer must deploy power policy'
-grep -q 'command -v loginctl' "$root/deploy/install.sh" || fail 'installer must require loginctl'
+if grep -Eq 'polkit|xkp-agent-power.rules|command -v loginctl' "$root/deploy/install.sh"; then
+  fail 'root Agent installer must not require polkit or loginctl'
+fi
+if grep -Eq 'apt-get.*polkit|policykit-1|polkitd' "$root/deploy/one-click-install.sh"; then
+  fail 'one-click installer must not install polkit packages'
+fi
 grep -q 'docker info' "$root/deploy/install.sh" || fail 'installer must require a reachable Docker daemon'
 grep -q 'sysbox-runc' "$root/deploy/install.sh" || fail 'installer must require sysbox-runc'
 grep -q 'nvidia' "$root/deploy/install.sh" || fail 'installer must require NVIDIA container runtime'
@@ -27,8 +30,9 @@ grep -q 'environmentWorkspaceRoot:' "$root/deploy/verify.sh" || fail 'verificati
 grep -q '/bin/bash' "$root/deploy/verify.sh" || fail 'verification must require the fixed terminal shell'
 grep -q 'User=root' "$root/deploy/verify.sh" || fail 'verification must check the systemd root identity'
 grep -q 'docker info' "$root/deploy/verify.sh" || fail 'verification must check Docker access as the service account'
-grep -q '/etc/polkit-1/rules.d' "$root/deploy/install.sh" || fail 'installer must require polkit'
 grep -q '/usr/bin/loginctl' "$root/internal/power/controller_linux.go" || fail 'power controller must use fixed executable path'
+grep -q '/usr/bin/systemctl' "$root/internal/power/controller_linux.go" || fail 'power controller must fall back to systemctl'
+grep -q '/usr/sbin/shutdown' "$root/internal/power/controller_linux.go" || fail 'power controller must fall back to shutdown'
 grep -q -- '--purge-identity' "$root/deploy/uninstall.sh" || fail 'uninstall must preserve identity by default'
 config_example="$root/deploy/agent.yml.example"
 grep -q '^managementUrl: "https://' "$config_example" || fail 'production config example must use HTTPS'

@@ -116,6 +116,24 @@ func (f *FakeExecutor) RestorePair(_ context.Context, payload protocol.Environme
 	return f.inspectLocked(payload)
 }
 
+func (f *FakeExecutor) DeletePair(_ context.Context, payload protocol.EnvironmentPayload) (PairResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.validator.ValidateControl(payload); err != nil {
+		return PairResult{}, err
+	}
+	for _, component := range payload.Components {
+		if existing, exists := f.containers[component.ContainerName]; exists &&
+			(existing.Fingerprint != component.ConfigFingerprint || existing.ComponentType != component.ComponentType) {
+			return PairResult{}, fmt.Errorf("managed container identity mismatch: %s", component.ContainerName)
+		}
+	}
+	for _, component := range payload.Components {
+		delete(f.containers, component.ContainerName)
+	}
+	return pairWithState(payload, StateMissing), nil
+}
+
 func (f *FakeExecutor) preflightLocked(payload protocol.EnvironmentPayload) error {
 	for _, component := range payload.Components {
 		if existing, exists := f.containers[component.ContainerName]; exists &&
@@ -146,7 +164,8 @@ func (f *FakeExecutor) inspectLocked(payload protocol.EnvironmentPayload) (PairR
 			}
 			state = existing.State
 		}
-		value := ComponentResult{ComponentType: component.ComponentType, ContainerName: component.ContainerName, State: state}
+		value := ComponentResult{ComponentType: component.ComponentType, ContainerName: component.ContainerName,
+			ConfigFingerprint: component.ConfigFingerprint, State: state}
 		if component.ComponentType == "ANNOTATION" {
 			result.Annotation = value
 		} else {

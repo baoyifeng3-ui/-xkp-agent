@@ -24,6 +24,31 @@ func TestValidatorAcceptsAValidPairInsideWorkspaceRoot(t *testing.T) {
 	}
 }
 
+func TestValidatorAcceptsUnlimitedCPUAndMemory(t *testing.T) {
+	payload := validPayload()
+	payload.Components[0].CPULimitMillis = 0
+	payload.Components[0].MemoryLimitBytes = 0
+	if _, err := (Validator{WorkspaceRoot: t.TempDir()}).ValidateCreate(payload); err != nil {
+		t.Fatalf("unlimited component rejected: %v", err)
+	}
+}
+
+func TestValidatorAcceptsBoundedEditorBootstrapCommand(t *testing.T) {
+	payload := validPayload()
+	payload.Components[1].Command = []string{"/bin/sh", "-c", strings.Repeat("x", 1187)}
+	if _, err := (Validator{WorkspaceRoot: t.TempDir()}).ValidateCreate(payload); err != nil {
+		t.Fatalf("bounded bootstrap command rejected: %v", err)
+	}
+}
+
+func TestValidatorRejectsCommandArgumentAboveEnvelopeBudget(t *testing.T) {
+	payload := validPayload()
+	payload.Components[1].Command = []string{"/bin/sh", "-c", strings.Repeat("x", 2049)}
+	if _, err := (Validator{WorkspaceRoot: t.TempDir()}).ValidateCreate(payload); err == nil {
+		t.Fatal("oversized command argument was accepted")
+	}
+}
+
 func TestValidatorRejectsUnsafeCreateSpecifications(t *testing.T) {
 	root := t.TempDir()
 	tests := []struct {

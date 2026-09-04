@@ -42,6 +42,21 @@ func TestFakeExecutorConvergesPairAndPreservesWorkspaceOnRestore(t *testing.T) {
 	}
 }
 
+func TestFakeExecutorReturnsComponentFingerprints(t *testing.T) {
+	executor := NewFakeExecutor(Validator{WorkspaceRoot: t.TempDir()})
+	payload := validPayload()
+
+	result, err := executor.CreatePair(context.Background(), payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Annotation.ConfigFingerprint != payload.Components[0].ConfigFingerprint ||
+		result.Editor.ConfigFingerprint != payload.Components[1].ConfigFingerprint {
+		t.Fatalf("result fingerprints = %q, %q", result.Annotation.ConfigFingerprint,
+			result.Editor.ConfigFingerprint)
+	}
+}
+
 func TestFakeExecutorDoesNotCreateHalfAPairOnIdentityConflict(t *testing.T) {
 	executor := NewFakeExecutor(Validator{WorkspaceRoot: t.TempDir()})
 	payload := validPayload()

@@ -6,12 +6,18 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
 	"xkp-agent/internal/collect"
 	"xkp-agent/internal/protocol"
 )
+
+func isParallelControl(command protocol.Command) bool {
+	return command.Type == protocol.StartTrainingEnvironment || command.Type == protocol.StopTrainingEnvironment ||
+		command.Type == protocol.StartCompetitionEnvironment || command.Type == protocol.StopCompetitionEnvironment
+}
 
 type HeartbeatRequest struct {
 	AgentID      string           `json:"agentId"`
@@ -140,6 +146,7 @@ func (a *Agent) commandLoop(ctx context.Context) {
 			return
 		}
 		if err != nil {
+			log.Printf("command loop: %v", err)
 			timer := time.NewTimer(jitter(time.Second))
 			select {
 			case <-ctx.Done():
@@ -159,18 +166,46 @@ func (a *Agent) processCommandsOnce(ctx context.Context) error {
 	if retried {
 		return nil
 	}
-	commands, err := a.transport.PollCommands(ctx, 25)
+	if !a.grantStore.Current().Valid(time.Now().UTC()) {
+		if err := a.SendOnce(ctx); err != nil {
+			return fmt.Errorf("refresh environment operation grant: %w", err)
+		}
+	}
+	commands, err := a.transport.PollCommands(ctx, 3)
 	if err != nil {
 		return err
 	}
+	decoded := make([]protocol.Command, 0, len(commands))
 	for _, raw := range commands {
 		command, decodeErr := protocol.DecodeCommand(raw)
 		if decodeErr != nil {
 			return fmt.Errorf("reject invalid command envelope: %w", decodeErr)
 		}
-		if dispatchErr := a.commandHandler.Dispatch(ctx, command); dispatchErr != nil {
-			return dispatchErr
+		decoded = append(decoded, command)
+	}
+	var wg sync.WaitGroup
+	errCh := make(chan error, len(decoded))
+	for _, command := range decoded {
+		if !isParallelControl(command) {
+			wg.Wait()
+			if err := a.commandHandler.Dispatch(ctx, command); err != nil {
+				return err
+			}
+			continue
 		}
+		wg.Add(1)
+		go func(value protocol.Command) {
+			defer wg.Done()
+			if err := a.commandHandler.Dispatch(ctx, value); err != nil {
+				errCh <- err
+			}
+		}(command)
+	}
+	wg.Wait()
+	select {
+	case err := <-errCh:
+		return err
+	default:
 	}
 	return nil
 }

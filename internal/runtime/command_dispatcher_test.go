@@ -21,6 +21,33 @@ type commandTransportStub struct {
 	lastResult protocol.CommandResult
 }
 
+type modelWorkspaceStub struct{ listed, deployed bool }
+
+func (m *modelWorkspaceStub) List(context.Context, string) ([]string, error) {
+	m.listed = true
+	return []string{"models/a.onnx"}, nil
+}
+func (m *modelWorkspaceStub) Deploy(context.Context, protocol.ModelWorkspacePayload) error {
+	m.deployed = true
+	return nil
+}
+
+func TestDispatcherReportsModelWorkspaceFileList(t *testing.T) {
+	transport := &commandTransportStub{}
+	manager := &modelWorkspaceStub{}
+	dispatcher := NewCommandDispatcher(transport, &powerStub{order: &transport.order})
+	dispatcher.SetModelWorkspaceManager(manager)
+	command := protocol.Command{CommandID: "11111111-2222-4333-8444-555555555555", Type: protocol.ModelWorkspace,
+		Version: 1, LeaseToken: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+		ModelWorkspace: &protocol.ModelWorkspacePayload{Action: "LIST", ContainerName: "editor"}}
+	if err := dispatcher.Dispatch(context.Background(), command); err != nil {
+		t.Fatal(err)
+	}
+	if !manager.listed || transport.lastResult.Code != "MODEL_FILES_LISTED" || transport.lastResult.Details["files"] == nil {
+		t.Fatalf("listed=%v result=%#v", manager.listed, transport.lastResult)
+	}
+}
+
 type terminalManagerStub struct {
 	order  *[]string
 	err    error
@@ -45,8 +72,15 @@ func (m *terminalManagerStub) Start(context.Context, protocol.Command) error {
 	}
 	return m.err
 }
-func (m *terminalManagerStub) Active() bool                        { return m.active }
-func (m *terminalManagerStub) Close(context.Context, string) error { m.active = false; return nil }
+func (m *terminalManagerStub) Active() bool { return m.active }
+func (m *terminalManagerStub) Close(context.Context, string) error {
+	*m.order = append(*m.order, "terminal-close")
+	m.active = false
+	if terminalErr, ok := m.err.(*terminalpkg.Error); ok && terminalErr.Code == "TERMINAL_ALREADY_ACTIVE" {
+		m.err = nil
+	}
+	return nil
+}
 
 type panicCommandStore struct{}
 
@@ -81,18 +115,16 @@ func TestDispatcherRequiresConfiguredTerminalManagerBeforeAcknowledgement(t *tes
 	}
 }
 
-func TestDispatcherFinishesSecondActiveTerminalWithoutDisturbingFirst(t *testing.T) {
+func TestDispatcherReplacesStaleActiveTerminal(t *testing.T) {
 	transport := &commandTransportStub{}
 	manager := &terminalManagerStub{order: &transport.order, active: true,
 		err: &terminalpkg.Error{Code: "TERMINAL_ALREADY_ACTIVE"}}
 	dispatcher := NewCommandDispatcherWithTerminal(transport, &powerStub{order: &transport.order}, &panicCommandStore{}, manager)
-	err := dispatcher.Dispatch(context.Background(), terminalRuntimeCommand())
-	if err == nil || !manager.active || !reflect.DeepEqual(transport.order, []string{"start", "terminal-start", "result"}) {
-		t.Fatalf("error=%v active=%v order=%v", err, manager.active, transport.order)
+	if err := dispatcher.Dispatch(context.Background(), terminalRuntimeCommand()); err != nil {
+		t.Fatal(err)
 	}
-	if transport.lastResult.Success || transport.lastResult.Code != "TERMINAL_ALREADY_ACTIVE" ||
-		transport.lastResult.LeaseToken != terminalRuntimeCommand().LeaseToken {
-		t.Fatalf("result = %#v", transport.lastResult)
+	if !manager.active || !reflect.DeepEqual(transport.order, []string{"start", "terminal-start", "terminal-close", "terminal-start"}) {
+		t.Fatalf("active=%v order=%v", manager.active, transport.order)
 	}
 }
 
@@ -205,6 +237,9 @@ func (e *environmentExecutorStub) StopPair(context.Context, protocol.Environment
 }
 func (e *environmentExecutorStub) RestorePair(context.Context, protocol.EnvironmentPayload) (container.PairResult, error) {
 	return e.execute("restore")
+}
+func (e *environmentExecutorStub) DeletePair(context.Context, protocol.EnvironmentPayload) (container.PairResult, error) {
+	return e.execute("delete")
 }
 
 func (p *powerStub) Shutdown(context.Context) error {

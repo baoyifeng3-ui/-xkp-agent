@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -32,6 +33,22 @@ type TerminalTicket = protocol.TerminalTicket
 
 // Credential returns the enrolled bearer credential for authenticated websocket handshakes.
 func (c *Client) Credential() string { return c.credential }
+func (c *Client) Download(ctx context.Context, path string) (io.ReadCloser, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.credential)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode/100 != 2 {
+		resp.Body.Close()
+		return nil, fmt.Errorf("download rejected with status %d", resp.StatusCode)
+	}
+	return resp.Body, nil
+}
 
 // TLSConfig returns a clone of the HTTP transport TLS settings.
 func (c *Client) TLSConfig() *tls.Config {
@@ -196,7 +213,7 @@ func (c *Client) EnrollWithDisplayName(ctx context.Context, token, displayName s
 		PrimaryIP     string `json:"primaryIp"`
 		MACAddress    string `json:"macAddress"`
 		AgentVersion  string `json:"agentVersion"`
-	}{token, displayName, info.MachineDigest, info.Hostname, info.PrimaryIP, info.MACAddress, "0.1.0"}
+	}{token, displayName, info.MachineDigest, info.Hostname, info.PrimaryIP, info.MACAddress, "0.2.28"}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return Enrollment{}, fmt.Errorf("encode enrollment request")
@@ -247,6 +264,55 @@ func (c *Client) PollCommands(ctx context.Context, waitSeconds int) ([]json.RawM
 	return response.Commands, nil
 }
 
+type statusError struct{ status int }
+
+func (e *statusError) Error() string {
+	return fmt.Sprintf("agent request rejected with status %d", e.status)
+}
+
+func (c *Client) DownloadUpgradeBinary(ctx context.Context, downloadPath string, maximumBytes int64) (io.ReadCloser, error) {
+	if c.agentID == "" || c.credential == "" || downloadPath != "/agent/v1/upgrade-binary" {
+		return nil, fmt.Errorf("upgrade download request is invalid")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+downloadPath, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create upgrade download request")
+	}
+	req.Header.Set("Authorization", "Bearer "+c.credential)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("upgrade download failed")
+	}
+	if resp.StatusCode/100 != 2 || resp.ContentLength <= 0 || resp.ContentLength > maximumBytes {
+		resp.Body.Close()
+		return nil, fmt.Errorf("upgrade download rejected")
+	}
+	return resp.Body, nil
+}
+
+func (c *Client) DownloadImageArchive(ctx context.Context, deploymentID string, maximumBytes int64) (io.ReadCloser, int64, error) {
+	if c.agentID == "" || c.credential == "" || !genericCommandUUID.MatchString(deploymentID) {
+		return nil, 0, fmt.Errorf("image archive request is invalid")
+	}
+	path := "/agent/v1/image-deployments/" + deploymentID + "/archive"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	if err != nil {
+		return nil, 0, fmt.Errorf("create image archive request")
+	}
+	req.Header.Set("Authorization", "Bearer "+c.credential)
+	downloadClient := *c.http
+	downloadClient.Timeout = 0
+	resp, err := downloadClient.Do(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("image archive download failed: %w", err)
+	}
+	if resp.StatusCode/100 != 2 || resp.ContentLength <= 0 || resp.ContentLength > maximumBytes {
+		resp.Body.Close()
+		return nil, 0, fmt.Errorf("image archive download rejected with status %d", resp.StatusCode)
+	}
+	return resp.Body, resp.ContentLength, nil
+}
+
 func (c *Client) StartCommand(ctx context.Context, commandID, leaseToken string) error {
 	if !genericCommandUUID.MatchString(commandID) || !genericCommandUUID.MatchString(leaseToken) {
 		return fmt.Errorf("command identifiers are invalid")
@@ -275,7 +341,14 @@ func (c *Client) FinishCommand(ctx context.Context, commandID string, result pro
 	}
 	var response map[string]interface{}
 	path := "/agent/v1/commands/" + commandID + "/result"
-	return c.authenticatedJSON(ctx, http.MethodPost, path, result, &response)
+	err := c.authenticatedJSON(ctx, http.MethodPost, path, result, &response)
+	var rejected *statusError
+	if errors.As(err, &rejected) && rejected.status == http.StatusConflict {
+		// The platform has already terminalized this command. Treat the result as
+		// idempotently accepted so local recovery state can be cleared.
+		return nil
+	}
+	return err
 }
 
 func (c *Client) authenticatedJSON(ctx context.Context, method, path string, payload, result interface{}) error {
@@ -305,7 +378,7 @@ func (c *Client) authenticatedJSON(ctx context.Context, method, path string, pay
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return fmt.Errorf("agent request rejected with status %d", resp.StatusCode)
+		return &statusError{status: resp.StatusCode}
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(result); err != nil {
 		return fmt.Errorf("decode agent response")

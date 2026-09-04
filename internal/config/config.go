@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -14,6 +15,7 @@ type Config struct {
 	CACertificate            string `yaml:"caCertificate"`
 	WorkspacePath            string `yaml:"workspacePath"`
 	EnvironmentWorkspaceRoot string `yaml:"environmentWorkspaceRoot,omitempty"`
+	CodeServerTLSDir        string `yaml:"codeServerTLSDir,omitempty"`
 	AgentID                  string `yaml:"agentId,omitempty"`
 	Credential               string `yaml:"credential,omitempty"`
 	Development              bool   `yaml:"development,omitempty"`
@@ -37,6 +39,7 @@ func Load(path string) (Config, error) {
 	if cfg.EnvironmentWorkspaceRoot == "" {
 		cfg.EnvironmentWorkspaceRoot = filepath.Join(cfg.WorkspacePath, "environments")
 	}
+	if cfg.CodeServerTLSDir == "" { cfg.CodeServerTLSDir = "/etc/xkp-agent/code-server-tls" }
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -53,6 +56,7 @@ func Load(path string) (Config, error) {
 }
 
 func (c Config) Validate() error {
+	if c.CodeServerTLSDir == "" { c.CodeServerTLSDir = "/etc/xkp-agent/code-server-tls" }
 	u, err := url.Parse(c.ManagementURL)
 	if err != nil || u.Host == "" {
 		return fmt.Errorf("invalid management URL")
@@ -69,6 +73,7 @@ func (c Config) Validate() error {
 	if !filepath.IsAbs(c.EnvironmentWorkspaceRoot) {
 		return fmt.Errorf("environment workspace root must be absolute")
 	}
+	if c.CodeServerTLSDir != "" && !filepath.IsAbs(c.CodeServerTLSDir) && !strings.HasPrefix(c.CodeServerTLSDir, "/") { return fmt.Errorf("code-server TLS directory must be absolute") }
 	if !c.Development {
 		if c.CACertificate == "" {
 			return fmt.Errorf("CA certificate is required")

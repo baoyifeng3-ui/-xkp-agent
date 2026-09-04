@@ -46,10 +46,14 @@ func collectDocker(ctx context.Context) (Snapshot, error) {
 	}
 	running := 0
 	environments := map[string]struct{}{}
+	// Label namespace must match internal/container/docker.go's labelEnvironment
+	// ("com.xkp.environment.id"); reading the unprefixed key never matches and
+	// would leave RunningEnvironmentCount at zero.
+	const labelEnvironment = "com.xkp.environment.id"
 	for _, container := range containers {
 		if container.State == "running" {
 			running++
-			if id := container.Labels["xkp.environment.id"]; id != "" {
+			if id := container.Labels[labelEnvironment]; id != "" {
 				environments[id] = struct{}{}
 			}
 		}
