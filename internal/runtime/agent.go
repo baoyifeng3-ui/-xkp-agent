@@ -14,11 +14,6 @@ import (
 	"xkp-agent/internal/protocol"
 )
 
-func isParallelControl(command protocol.Command) bool {
-	return command.Type == protocol.StartTrainingEnvironment || command.Type == protocol.StopTrainingEnvironment ||
-		command.Type == protocol.StartCompetitionEnvironment || command.Type == protocol.StopCompetitionEnvironment
-}
-
 type HeartbeatRequest struct {
 	AgentID      string           `json:"agentId"`
 	BootID       string           `json:"bootId"`
@@ -183,29 +178,11 @@ func (a *Agent) processCommandsOnce(ctx context.Context) error {
 		}
 		decoded = append(decoded, command)
 	}
-	var wg sync.WaitGroup
-	errCh := make(chan error, len(decoded))
 	for _, command := range decoded {
-		if !isParallelControl(command) {
-			wg.Wait()
-			if err := a.commandHandler.Dispatch(ctx, command); err != nil {
-				return err
-			}
-			continue
+		// Persist and acknowledge each result before processing the next command.
+		if err := a.commandHandler.Dispatch(ctx, command); err != nil {
+			return err
 		}
-		wg.Add(1)
-		go func(value protocol.Command) {
-			defer wg.Done()
-			if err := a.commandHandler.Dispatch(ctx, value); err != nil {
-				errCh <- err
-			}
-		}(command)
-	}
-	wg.Wait()
-	select {
-	case err := <-errCh:
-		return err
-	default:
 	}
 	return nil
 }

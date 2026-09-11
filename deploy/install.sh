@@ -48,8 +48,8 @@ install -d -m 0750 -o xkp-agent -g xkp-agent "$environment_workspace"
 install -m 0755 "$binary" /usr/local/bin/xkp-agent
 install -m 0644 "$ca_file" /etc/xkp-agent/ca.crt
 install -d -m 0700 -o root -g root /etc/xkp-agent/code-server-tls
-install -m 0644 -o root -g root "$code_server_cert" /etc/xkp-agent/code-server-tls/code-cert.pem
-install -m 0600 -o root -g root "$code_server_key" /etc/xkp-agent/code-server-tls/code-cert-key.pem
+install -T -m 0644 -o root -g root "$code_server_cert" /etc/xkp-agent/code-server-tls/code-cert.pem
+install -T -m 0600 -o root -g root "$code_server_key" /etc/xkp-agent/code-server-tls/code-cert-key.pem
 install -m 0600 -o xkp-agent -g xkp-agent /dev/null /etc/xkp-agent/agent.yml
 
 yaml_escape() { local value=${1//\\/\\\\}; value=${value//\"/\\\"}; printf '%s' "$value"; }

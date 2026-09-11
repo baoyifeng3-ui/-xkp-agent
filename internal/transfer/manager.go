@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"xkp-agent/internal/protocol"
 )
 
@@ -21,10 +22,27 @@ type Manager struct {
 
 func New(client downloader, root string) *Manager { return &Manager{client: client, root: root} }
 func (m *Manager) Transfer(ctx context.Context, p protocol.FileTransferPayload) error {
+	if !filepath.IsLocal(filepath.FromSlash(p.TargetRelativePath)) || p.TargetRelativePath == "." {
+		return fmt.Errorf("target path is invalid")
+	}
 	target := filepath.Join(m.root, filepath.FromSlash(p.TargetRelativePath))
 	rel, err := filepath.Rel(m.root, target)
-	if err != nil || rel == ".." || filepath.IsAbs(rel) {
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 		return fmt.Errorf("target path is invalid")
+	}
+	current := m.root
+	for _, segment := range strings.Split(rel, string(filepath.Separator)) {
+		current = filepath.Join(current, segment)
+		info, statErr := os.Lstat(current)
+		if os.IsNotExist(statErr) {
+			break
+		}
+		if statErr != nil {
+			return statErr
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("target path contains a symlink")
+		}
 	}
 	if err = os.MkdirAll(filepath.Dir(target), 0750); err != nil {
 		return err
@@ -34,9 +52,14 @@ func (m *Manager) Transfer(ctx context.Context, p protocol.FileTransferPayload) 
 		return err
 	}
 	defer body.Close()
-	tmp := target + ".part"
-	out, err := os.Create(tmp)
+	out, err := os.CreateTemp(filepath.Dir(target), ".transfer-*.part")
 	if err != nil {
+		return err
+	}
+	tmp := out.Name()
+	defer os.Remove(tmp)
+	if err := out.Chmod(0644); err != nil {
+		out.Close()
 		return err
 	}
 	hash := sha256.New()

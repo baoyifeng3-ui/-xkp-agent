@@ -8,29 +8,48 @@ import (
 )
 
 type Snapshot struct {
-	CPUPercent              *float64          `json:"cpuPercent"`
-	RAMTotalBytes           *uint64           `json:"ramTotalBytes,omitempty"`
-	RAMUsedBytes            *uint64           `json:"ramUsedBytes,omitempty"`
-	RAMPercent              *float64          `json:"ramPercent"`
-	GPUModel                string            `json:"gpuModel,omitempty"`
-	GPUPercent              *float64          `json:"gpuPercent"`
-	GPUTemperatureCelsius   *uint32           `json:"gpuTemperatureCelsius,omitempty"`
-	GPUMemoryTotalBytes     *uint64           `json:"gpuMemoryTotalBytes,omitempty"`
-	GPUMemoryUsedBytes      *uint64           `json:"gpuMemoryUsedBytes,omitempty"`
-	GPUMemoryPercent        *float64          `json:"gpuMemoryPercent"`
-	SystemDiskTotalBytes    *uint64           `json:"systemDiskTotalBytes,omitempty"`
-	SystemDiskUsedBytes     *uint64           `json:"systemDiskUsedBytes,omitempty"`
-	SystemDiskPercent       *float64          `json:"systemDiskPercent"`
-	WorkspaceDiskTotalBytes *uint64           `json:"workspaceDiskTotalBytes,omitempty"`
-	WorkspaceDiskUsedBytes  *uint64           `json:"workspaceDiskUsedBytes,omitempty"`
-	WorkspaceDiskPercent    *float64          `json:"workspaceDiskPercent"`
-	DockerAvailable         *bool             `json:"dockerAvailable"`
-	DockerVersion           string            `json:"dockerVersion,omitempty"`
-	RunningEnvironmentCount *int              `json:"runningEnvironmentCount"`
-	RunningContainerCount   *int              `json:"runningContainerCount"`
-	NetworkReceiveBytesPerSecond *int64        `json:"networkReceiveBytesPerSecond"`
-	NetworkSendBytesPerSecond    *int64        `json:"networkSendBytesPerSecond"`
-	CollectorErrors         map[string]string `json:"collectorErrors"`
+	CPUPercent                   *float64          `json:"cpuPercent"`
+	RAMTotalBytes                *uint64           `json:"ramTotalBytes,omitempty"`
+	RAMUsedBytes                 *uint64           `json:"ramUsedBytes,omitempty"`
+	RAMPercent                   *float64          `json:"ramPercent"`
+	GPUModel                     string            `json:"gpuModel,omitempty"`
+	GPUPercent                   *float64          `json:"gpuPercent"`
+	GPUTemperatureCelsius        *uint32           `json:"gpuTemperatureCelsius,omitempty"`
+	GPUMemoryTotalBytes          *uint64           `json:"gpuMemoryTotalBytes,omitempty"`
+	GPUMemoryUsedBytes           *uint64           `json:"gpuMemoryUsedBytes,omitempty"`
+	GPUMemoryPercent             *float64          `json:"gpuMemoryPercent"`
+	SystemDiskTotalBytes         *uint64           `json:"systemDiskTotalBytes,omitempty"`
+	SystemDiskUsedBytes          *uint64           `json:"systemDiskUsedBytes,omitempty"`
+	SystemDiskPercent            *float64          `json:"systemDiskPercent"`
+	WorkspaceDiskTotalBytes      *uint64           `json:"workspaceDiskTotalBytes,omitempty"`
+	WorkspaceDiskUsedBytes       *uint64           `json:"workspaceDiskUsedBytes,omitempty"`
+	WorkspaceDiskPercent         *float64          `json:"workspaceDiskPercent"`
+	DockerAvailable              *bool             `json:"dockerAvailable"`
+	DockerVersion                string            `json:"dockerVersion,omitempty"`
+	RunningEnvironmentCount      *int              `json:"runningEnvironmentCount"`
+	RunningContainerCount        *int              `json:"runningContainerCount"`
+	NetworkReceiveBytesPerSecond *int64            `json:"networkReceiveBytesPerSecond"`
+	NetworkSendBytesPerSecond    *int64            `json:"networkSendBytesPerSecond"`
+	CollectorErrors              map[string]string `json:"collectorErrors"`
+	Images                       []DockerImage     `json:"images,omitempty"`
+	Containers                   []DockerContainer `json:"containers,omitempty"`
+}
+
+type DockerImage struct {
+	Repository string `json:"repository"`
+	Tag        string `json:"tag"`
+	ID         string `json:"id"`
+	Digest     string `json:"digest,omitempty"`
+	SizeBytes  int64  `json:"sizeBytes"`
+	Created    int64  `json:"created"`
+}
+type DockerContainer struct {
+	Name    string `json:"name"`
+	ID      string `json:"id"`
+	Image   string `json:"image"`
+	State   string `json:"state"`
+	Status  string `json:"status"`
+	Created int64  `json:"created"`
 }
 
 type Collector interface {
@@ -146,5 +165,11 @@ func merge(to *Snapshot, from Snapshot) {
 	}
 	if from.NetworkSendBytesPerSecond != nil {
 		to.NetworkSendBytesPerSecond = from.NetworkSendBytesPerSecond
+	}
+	if from.Images != nil {
+		to.Images = from.Images
+	}
+	if from.Containers != nil {
+		to.Containers = from.Containers
 	}
 }

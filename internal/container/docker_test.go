@@ -13,12 +13,68 @@ import (
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/go-connections/nat"
 	"github.com/opencontainers/image-spec/specs-go/v1"
+	"xkp-agent/internal/protocol"
 )
 
 type createCall struct {
 	config     *dockercontainer.Config
 	hostConfig *dockercontainer.HostConfig
 	name       string
+}
+
+func TestStopMissingEnvironmentIsIdempotent(t *testing.T) {
+	payload := validPayload()
+	executor := NewDockerExecutor(&fakeDockerAPI{containers: map[string]types.ContainerJSON{}}, Validator{WorkspaceRoot: t.TempDir()})
+	result, err := executor.StopPair(context.Background(), payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Annotation.State != StateMissing || result.Editor.State != StateMissing {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func testTLSDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, name := range []string{"code-cert.pem", "code-cert-key.pem"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("test fixture"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func TestDockerExecutorSupportsSingleComponentLifecycle(t *testing.T) {
+	for _, component := range validPayload().Components {
+		t.Run(component.ComponentType, func(t *testing.T) {
+			payload := validPayload()
+			payload.Components = []protocol.EnvironmentComponent{component}
+			api := &fakeDockerAPI{containers: map[string]types.ContainerJSON{}}
+			executor := NewDockerExecutor(api, Validator{WorkspaceRoot: t.TempDir(), CodeServerTLSDir: testTLSDir(t)})
+			if _, err := executor.CreatePair(context.Background(), payload); err != nil {
+				t.Fatal(err)
+			}
+			if len(api.creates) != 1 {
+				t.Fatalf("creates = %d", len(api.creates))
+			}
+			if _, err := executor.StartPair(context.Background(), payload); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := executor.StopPair(context.Background(), payload); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := executor.RestorePair(context.Background(), payload); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := executor.DeletePair(context.Background(), payload); err != nil {
+				t.Fatal(err)
+			}
+			if len(api.containers) != 0 {
+				t.Fatal("container not deleted")
+			}
+		})
+	}
 }
 
 type fakeMPSManager struct{ directory string }
@@ -122,7 +178,7 @@ func (f *fakeDockerAPI) ContainerRemove(_ context.Context, name string, _ types.
 
 func TestDockerExecutorCreatesStoppedPairWithSharedWorkspaceAndTypedLimits(t *testing.T) {
 	api := &fakeDockerAPI{containers: map[string]types.ContainerJSON{}}
-	executor := NewDockerExecutor(api, Validator{WorkspaceRoot: t.TempDir()})
+	executor := NewDockerExecutor(api, Validator{WorkspaceRoot: t.TempDir(), CodeServerTLSDir: testTLSDir(t)})
 	payload := validPayload()
 
 	result, err := executor.CreatePair(context.Background(), payload)
@@ -151,17 +207,47 @@ func TestDockerExecutorCreatesStoppedPairWithSharedWorkspaceAndTypedLimits(t *te
 
 func TestDockerExecutorMountsOnlyEditorLeafTlsFilesReadOnly(t *testing.T) {
 	payload := validPayload()
-	_, host, err := dockerConfigs(payload.EnvironmentID, t.TempDir(), payload.Components[1], "", "/etc/xkp-agent/code-server-tls")
-	if err != nil { t.Fatal(err) }
+	tlsDir := t.TempDir()
+	for _, name := range []string{"code-cert.pem", "code-cert-key.pem"} {
+		if err := os.WriteFile(filepath.Join(tlsDir, name), []byte("test"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, host, err := dockerConfigs(payload.EnvironmentID, t.TempDir(), payload.Components[1], "", tlsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := []string{
-		"/etc/xkp-agent/code-server-tls/code-cert.pem:/root/.config/code-cert.pem:ro",
-		"/etc/xkp-agent/code-server-tls/code-cert-key.pem:/root/.config/code-cert-key.pem:ro",
+		tlsDir + "/code-cert.pem:/root/.config/code-cert.pem:ro",
+		tlsDir + "/code-cert-key.pem:/root/.config/code-cert-key.pem:ro",
 	}
 	for _, bind := range want {
-		if !contains(host.Binds, bind) { t.Fatalf("missing TLS bind %q in %#v", bind, host.Binds) }
+		if !contains(host.Binds, bind) {
+			t.Fatalf("missing TLS bind %q in %#v", bind, host.Binds)
+		}
 	}
 	for _, bind := range host.Binds {
-		if strings.Contains(bind, "ca.key") || strings.Contains(bind, "id_ed25519") || strings.Contains(bind, "id_rsa") { t.Fatalf("private platform key mount: %q", bind) }
+		if strings.Contains(bind, "ca.key") || strings.Contains(bind, "id_ed25519") || strings.Contains(bind, "id_rsa") {
+			t.Fatalf("private platform key mount: %q", bind)
+		}
+	}
+}
+
+func TestPreflightRejectsTLSDirectory(t *testing.T) {
+	tlsDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tlsDir, "code-cert.pem"), []byte("certificate"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(tlsDir, "code-cert-key.pem"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	payload := validPayload()
+	_, host, err := dockerConfigs(payload.EnvironmentID, t.TempDir(), payload.Components[1], "", tlsDir)
+	if err == nil || !strings.Contains(err.Error(), "code-cert-key.pem must be a regular file") {
+		t.Fatalf("error = %v", err)
+	}
+	if host != nil {
+		t.Fatalf("host config created after failed TLS preflight: %#v", host)
 	}
 }
 
@@ -174,7 +260,7 @@ func TestDockerExecutorMakesSharedWorkspaceReadableByAnnotationService(t *testin
 	}
 
 	api := &fakeDockerAPI{containers: map[string]types.ContainerJSON{}}
-	if _, err := NewDockerExecutor(api, Validator{WorkspaceRoot: root}).CreatePair(context.Background(), payload); err != nil {
+	if _, err := NewDockerExecutor(api, Validator{WorkspaceRoot: root, CodeServerTLSDir: testTLSDir(t)}).CreatePair(context.Background(), payload); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(workspace)
@@ -187,12 +273,13 @@ func TestDockerExecutorMakesSharedWorkspaceReadableByAnnotationService(t *testin
 }
 
 func TestDockerExecutorEnablesMpsOnlyWhenComponentRequestsIt(t *testing.T) {
+	tlsDir := testTLSDir(t)
 	payload := validPayload()
 	payload.Components[1].MPSEnabled = true
 	payload.Components[1].GPUComputePercent = 35
 	payload.Components[1].GPUMemoryLimitBytes = 2 * 1024 * 1024 * 1024
 	api := &fakeDockerAPI{containers: map[string]types.ContainerJSON{}}
-	if _, err := NewDockerExecutor(api, Validator{WorkspaceRoot: t.TempDir()}, fakeMPSManager{directory: "/tmp/xkp-mps"}).CreatePair(context.Background(), payload); err != nil {
+	if _, err := NewDockerExecutor(api, Validator{WorkspaceRoot: t.TempDir(), CodeServerTLSDir: tlsDir}, fakeMPSManager{directory: "/tmp/xkp-mps"}).CreatePair(context.Background(), payload); err != nil {
 		t.Fatal(err)
 	}
 	if got := api.creates[1].config.Env; len(got) != 6 || got[0] != "TF_FORCE_GPU_ALLOW_GROWTH=true" ||
@@ -202,8 +289,8 @@ func TestDockerExecutorEnablesMpsOnlyWhenComponentRequestsIt(t *testing.T) {
 		t.Fatalf("MPS environment = %#v", got)
 	}
 	if got := api.creates[1].hostConfig.Binds; len(got) != 4 || got[1] != "/tmp/xkp-mps:/tmp/xkp-mps:rw" ||
-		got[2] != "/etc/xkp-agent/code-server-tls/code-cert.pem:/root/.config/code-cert.pem:ro" ||
-		got[3] != "/etc/xkp-agent/code-server-tls/code-cert-key.pem:/root/.config/code-cert-key.pem:ro" {
+		got[2] != tlsDir+"/code-cert.pem:/root/.config/code-cert.pem:ro" ||
+		got[3] != tlsDir+"/code-cert-key.pem:/root/.config/code-cert-key.pem:ro" {
 		t.Fatalf("MPS bind = %#v", got)
 	}
 }
@@ -213,8 +300,16 @@ func TestDockerConfigsPureGpuUsesRuntimeOnly(t *testing.T) {
 	payload.Components[1].GPUComputePercent = 0
 	payload.Components[1].GPUMemoryLimitBytes = 0
 	payload.Components[1].MPSEnabled = false
-	config, host, err := dockerConfigs(payload.EnvironmentID, t.TempDir(), payload.Components[1], "", "")
-	if err != nil { t.Fatal(err) }
+	tlsDir := t.TempDir()
+	for _, name := range []string{"code-cert.pem", "code-cert-key.pem"} {
+		if err := os.WriteFile(filepath.Join(tlsDir, name), []byte("test"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	config, host, err := dockerConfigs(payload.EnvironmentID, t.TempDir(), payload.Components[1], "", tlsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if host.Runtime != "nvidia" || len(host.Resources.DeviceRequests) != 0 || len(config.Env) != 0 {
 		t.Fatalf("pure GPU config = runtime %q, requests %#v, env %#v", host.Runtime, host.Resources.DeviceRequests, config.Env)
 	}
@@ -223,7 +318,7 @@ func TestDockerConfigsPureGpuUsesRuntimeOnly(t *testing.T) {
 func TestDockerExecutorCompensatesWhenSecondCreateFails(t *testing.T) {
 	payload := validPayload()
 	api := &fakeDockerAPI{containers: map[string]types.ContainerJSON{}, failCreate: payload.Components[1].ContainerName}
-	executor := NewDockerExecutor(api, Validator{WorkspaceRoot: t.TempDir()})
+	executor := NewDockerExecutor(api, Validator{WorkspaceRoot: t.TempDir(), CodeServerTLSDir: testTLSDir(t)})
 
 	if _, err := executor.CreatePair(context.Background(), payload); err == nil {
 		t.Fatal("expected create failure")
@@ -259,7 +354,7 @@ func TestDockerExecutorRestoreReplacesOwnedContainerWithOldFingerprint(t *testin
 		payload.Components[1].ContainerName: old,
 	}}
 
-	if _, err := NewDockerExecutor(api, Validator{WorkspaceRoot: t.TempDir()}).RestorePair(context.Background(), payload); err != nil {
+	if _, err := NewDockerExecutor(api, Validator{WorkspaceRoot: t.TempDir(), CodeServerTLSDir: testTLSDir(t)}).RestorePair(context.Background(), payload); err != nil {
 		t.Fatal(err)
 	}
 	if len(api.removes) != 1 || api.removes[0] != payload.Components[1].ContainerName {
@@ -320,7 +415,14 @@ func TestDockerExecutorInitializesAnnotationAuthenticationAfterStart(t *testing.
 
 type notFoundError struct{ name string }
 
-func contains(values []string, want string) bool { for _, value := range values { if value == want { return true } }; return false }
+func contains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
 
 func (e notFoundError) Error() string { return "No such container: " + e.name }
 

@@ -317,7 +317,7 @@ func TestManagerConstructorFailsClosedOnCorruptRecovery(t *testing.T) {
 
 func TestManagerRejectsExpiredDirectCommand(t *testing.T) {
 	manager, _ := NewManager(&memoryRecoveryStore{}, &runnerStub{}, &reporterStub{})
-	manager.now = func() time.Time { return time.Date(2026, 8, 20, 11, 0, 0, 0, time.UTC) }
+	manager.now = func() time.Time { return time.Now().UTC().Add(3 * time.Hour) }
 	err := manager.Start(context.Background(), terminalCommand())
 	var terminalErr *Error
 	if !errors.As(err, &terminalErr) || terminalErr.Code != "TERMINAL_COMMAND_EXPIRED" {

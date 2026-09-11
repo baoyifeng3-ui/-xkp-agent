@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -166,7 +167,12 @@ XKP
 }
 
 func (d *DockerExecutor) initializeAnnotationAuth(ctx context.Context, containerName string) error {
-	command := `t=$(docker exec cvat python3 /home/django/manage.py shell -c "from rest_framework.authtoken.models import Token; print(Token.objects.first().key)"|tail -1)&&test -n "$t"&&docker exec cvat_proxy sh -c "sed -i '/proxy_set_header Authorization/d' /etc/nginx/conf.d/default.conf;sed -i '/proxy_set_header        Host/a\\    proxy_set_header Authorization \"Token $t\";' /etc/nginx/conf.d/default.conf;nginx -s reload"`
+	command := `for attempt in $(seq 1 60); do
+  t=$(docker exec cvat python3 /home/django/manage.py shell -c "from rest_framework.authtoken.models import Token; t=Token.objects.first(); print(t.key if t else '')" 2>/dev/null | tail -1)
+  if test -n "$t" && docker exec cvat_proxy sh -c "sed -i '/proxy_set_header Authorization/d' /etc/nginx/conf.d/default.conf;sed -i '/proxy_set_header        Host/a\\    proxy_set_header Authorization \"Token $t\";' /etc/nginx/conf.d/default.conf;nginx -s reload"; then exit 0; fi
+  sleep 1
+done
+exit 1`
 	created, err := d.api.ContainerExecCreate(ctx, containerName, types.ExecConfig{Cmd: []string{"sh", "-lc", command}})
 	if err != nil {
 		return fmt.Errorf("prepare annotation authentication: %w", err)
@@ -174,7 +180,7 @@ func (d *DockerExecutor) initializeAnnotationAuth(ctx context.Context, container
 	if err = d.api.ContainerExecStart(ctx, created.ID, types.ExecStartCheck{Detach: true}); err != nil {
 		return fmt.Errorf("start annotation authentication: %w", err)
 	}
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(90 * time.Second)
 	for {
 		status, inspectErr := d.api.ContainerExecInspect(ctx, created.ID)
 		if inspectErr != nil {
@@ -257,7 +263,7 @@ func (d *DockerExecutor) StopPair(ctx context.Context, payload protocol.Environm
 	if err := d.validator.ValidateControl(payload); err != nil {
 		return PairResult{}, err
 	}
-	states, err := d.inspectStates(ctx, payload, true)
+	states, err := d.inspectStates(ctx, payload, false)
 	if err != nil {
 		return PairResult{}, err
 	}
@@ -273,7 +279,7 @@ func (d *DockerExecutor) StopPair(ctx context.Context, payload protocol.Environm
 		}
 		stopped = append(stopped, component.ContainerName)
 	}
-	return stoppedPair(payload), nil
+	return d.inspectPair(ctx, payload, false)
 }
 
 func (d *DockerExecutor) RestorePair(ctx context.Context, payload protocol.EnvironmentPayload) (PairResult, error) {
@@ -444,6 +450,15 @@ func dockerConfigs(environmentID, workspace string, component protocol.Environme
 	if component.ComponentType == "EDITOR" {
 		if codeServerTLSDir == "" {
 			codeServerTLSDir = "/etc/xkp-agent/code-server-tls"
+		}
+		for _, name := range []string{"code-cert.pem", "code-cert-key.pem"} {
+			info, err := os.Stat(filepath.Join(codeServerTLSDir, name))
+			if err != nil {
+				return nil, nil, fmt.Errorf("%s is unavailable: %w", name, err)
+			}
+			if !info.Mode().IsRegular() {
+				return nil, nil, fmt.Errorf("%s must be a regular file", name)
+			}
 		}
 		hostConfig.Binds = append(hostConfig.Binds,
 			codeServerTLSDir+"/code-cert.pem:/root/.config/code-cert.pem:ro",

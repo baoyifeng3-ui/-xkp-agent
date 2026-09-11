@@ -416,3 +416,14 @@ func TestDecodeCommandAtAllowsOnlyExplicitInsecureLoopback(t *testing.T) {
 		}
 	}
 }
+
+func TestDecodeDirectImageDeployment(t *testing.T) {
+	body := `{"commandId":"11111111-2222-4333-8444-555555555555","type":"DEPLOY_IMAGE","version":1,"leaseToken":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee","leaseExpiresAt":"2026-08-19T12:05:00Z","payload":{"agentId":"11111111-2222-4333-8444-555555555555","deploymentId":"22222222-3333-4444-8555-666666666666","imageName":"xkp/anno:v1","overwrite":true,"idempotencyKey":"request-1"}}`
+	command, err := DecodeCommandAt([]byte(body), time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command.ImageDeployment.ImageName != "xkp/anno:v1" || !command.ImageDeployment.Overwrite {
+		t.Fatalf("payload=%+v", command.ImageDeployment)
+	}
+}

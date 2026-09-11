@@ -16,6 +16,7 @@ import (
 	"xkp-agent/internal/collect"
 	"xkp-agent/internal/config"
 	containerexecutor "xkp-agent/internal/container"
+	"xkp-agent/internal/dockerinventory"
 	"xkp-agent/internal/identity"
 	imagedeploypkg "xkp-agent/internal/imagedeploy"
 	modeldeploypkg "xkp-agent/internal/modeldeploy"
@@ -26,7 +27,7 @@ import (
 	upgradepkg "xkp-agent/internal/upgrade"
 )
 
-const version = "0.2.28"
+const version = "0.2.34"
 
 func main() {
 	configPath := flag.String("config", "/etc/xkp-agent/config.yaml", "configuration file")
@@ -88,7 +89,7 @@ func main() {
 	}
 	defer dockerClient.Close()
 	executor := containerexecutor.NewDockerExecutor(dockerClient, containerexecutor.Validator{
-		WorkspaceRoot: cfg.EnvironmentWorkspaceRoot,
+		WorkspaceRoot:    cfg.EnvironmentWorkspaceRoot,
 		CodeServerTLSDir: cfg.CodeServerTLSDir,
 	}, containerexecutor.NewHostMPSManager(filepath.Join(cfg.WorkspacePath, "mps")))
 	grantStore := agentruntime.NewMemoryOperationGrantStore()
@@ -107,6 +108,7 @@ func main() {
 	}
 	dispatcher.SetUpgradeManager(upgradeManager)
 	dispatcher.SetImageDeploymentManager(imagedeploypkg.NewManager(api))
+	dispatcher.SetDockerInventoryManager(dockerinventory.New(dockerClient))
 	dispatcher.SetFileTransferManager(transferpkg.New(api, cfg.EnvironmentWorkspaceRoot))
 	dispatcher.SetModelWorkspaceManager(modeldeploypkg.New(modeldeploypkg.NewDockerRunner(dockerClient)))
 	agent := agentruntime.NewAgentWithGrantStore(cfg.AgentID, version, gatherer, api, dispatcher, grantStore)

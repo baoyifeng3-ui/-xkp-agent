@@ -21,6 +21,29 @@ type commandTransportStub struct {
 	lastResult protocol.CommandResult
 }
 
+func TestControlResultRetryDoesNotExecuteStartTwice(t *testing.T) {
+	transport := &commandTransportStub{finishErr: errors.New("HTTP 500")}
+	executor := &environmentExecutorStub{order: &transport.order}
+	d := NewCommandDispatcherWithExecutor(transport, &powerStub{order: &transport.order}, &memoryCommandStore{}, executor)
+	if err := d.Dispatch(context.Background(), environmentCommand(t, "start")); err == nil {
+		t.Fatal("expected failed result delivery")
+	}
+	transport.finishErr = nil
+	retried, err := d.RetryPending(context.Background())
+	if err != nil || !retried {
+		t.Fatalf("retry=%v error=%v", retried, err)
+	}
+	count := 0
+	for _, event := range transport.order {
+		if event == "start-environment" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("start executed %d times", count)
+	}
+}
+
 type modelWorkspaceStub struct{ listed, deployed bool }
 
 func (m *modelWorkspaceStub) List(context.Context, string) ([]string, error) {

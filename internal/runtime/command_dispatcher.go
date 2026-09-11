@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"xkp-agent/internal/container"
+	"xkp-agent/internal/imagedeploy"
 	"xkp-agent/internal/power"
 	"xkp-agent/internal/protocol"
 	terminalpkg "xkp-agent/internal/terminal"
@@ -32,6 +33,9 @@ type ImageDeploymentManager interface {
 	Deploy(context.Context, protocol.ImageDeploymentPayload,
 		func(int64, int64, string) error) (map[string]interface{}, error)
 }
+type DockerInventoryManager interface {
+	Execute(context.Context, protocol.DockerInventoryPayload) (map[string]interface{}, error)
+}
 type FileTransferManager interface {
 	Transfer(context.Context, protocol.FileTransferPayload) error
 }
@@ -51,6 +55,11 @@ type CommandDispatcher struct {
 	imageDeployment ImageDeploymentManager
 	fileTransfer    FileTransferManager
 	modelWorkspace  ModelWorkspaceManager
+	dockerInventory DockerInventoryManager
+}
+
+func (d *CommandDispatcher) SetDockerInventoryManager(manager DockerInventoryManager) {
+	d.dockerInventory = manager
 }
 
 func (d *CommandDispatcher) SetFileTransferManager(manager FileTransferManager) {
@@ -131,6 +140,9 @@ func NewCommandDispatcherWithGrantAndTerminal(transport CommandTransport, powerC
 }
 
 func (d *CommandDispatcher) Dispatch(ctx context.Context, command protocol.Command) error {
+	if command.Type == protocol.DockerInventoryAction {
+		return d.dispatchDockerInventory(ctx, command)
+	}
 	if command.Type == protocol.DeployImage {
 		return d.dispatchImageDeployment(ctx, command)
 	}
@@ -319,6 +331,9 @@ func (d *CommandDispatcher) dispatchImageDeployment(ctx context.Context, command
 	}
 	if deployErr != nil {
 		result.Code = "IMAGE_DEPLOYMENT_FAILED"
+		if errors.Is(deployErr, imagedeploy.ErrImageExists) {
+			result.Code = "IMAGE_EXISTS"
+		}
 		result.Message = boundedPlainMessage(deployErr.Error())
 	}
 	state.Result = &result
@@ -464,10 +479,6 @@ func isEnvironmentStop(commandType protocol.CommandType) bool {
 }
 
 func (d *CommandDispatcher) dispatchEnvironment(ctx context.Context, command protocol.Command) error {
-	if command.Type == protocol.StartTrainingEnvironment || command.Type == protocol.StopTrainingEnvironment ||
-		command.Type == protocol.StartCompetitionEnvironment || command.Type == protocol.StopCompetitionEnvironment {
-		return d.dispatchEnvironmentControl(ctx, command)
-	}
 	stored, err := d.store.Load()
 	if err != nil {
 		return err
@@ -507,18 +518,6 @@ func (d *CommandDispatcher) dispatchEnvironment(ctx context.Context, command pro
 		return fmt.Errorf("execute environment command: %w", executionErr)
 	}
 	return nil
-}
-
-func (d *CommandDispatcher) dispatchEnvironmentControl(ctx context.Context, command protocol.Command) error {
-	if err := d.transport.StartCommand(ctx, command.CommandID, command.LeaseToken); err != nil {
-		return fmt.Errorf("acknowledge command start: %w", err)
-	}
-	result, executionErr := d.executeEnvironment(ctx, command)
-	result.LeaseToken = command.LeaseToken
-	if err := d.transport.FinishCommand(ctx, command.CommandID, result); err != nil {
-		return err
-	}
-	return executionErr
 }
 
 func (d *CommandDispatcher) executeEnvironment(ctx context.Context, command protocol.Command) (protocol.CommandResult, error) {

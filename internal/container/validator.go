@@ -17,7 +17,7 @@ var (
 )
 
 type Validator struct {
-	WorkspaceRoot string
+	WorkspaceRoot    string
 	CodeServerTLSDir string
 }
 
@@ -82,7 +82,7 @@ func (v Validator) ValidateControl(payload protocol.EnvironmentPayload) error {
 }
 
 func validatePairIdentity(payload protocol.EnvironmentPayload) error {
-	if payload.EnvironmentID == "" || payload.OperationID == "" || len(payload.Components) != 2 {
+	if payload.EnvironmentID == "" || payload.OperationID == "" || len(payload.Components) < 1 || len(payload.Components) > 2 {
 		return fmt.Errorf("environment identity is invalid")
 	}
 	seenTypes := map[string]bool{}
@@ -99,9 +99,6 @@ func validatePairIdentity(payload protocol.EnvironmentPayload) error {
 		}
 		seenTypes[component.ComponentType] = true
 		seenNames[component.ContainerName] = true
-	}
-	if !seenTypes["ANNOTATION"] || !seenTypes["EDITOR"] {
-		return fmt.Errorf("annotation and editor components are required")
 	}
 	return nil
 }

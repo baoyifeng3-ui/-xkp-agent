@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/distribution/reference"
 )
 
 type TerminalTicket struct {
@@ -39,6 +41,7 @@ const (
 	DeployImage                   CommandType = "DEPLOY_IMAGE"
 	TransferFile                  CommandType = "TRANSFER_FILE"
 	ModelWorkspace                CommandType = "MODEL_WORKSPACE"
+	DockerInventoryAction         CommandType = "DOCKER_INVENTORY_ACTION"
 )
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
@@ -59,6 +62,35 @@ type Command struct {
 	ImageDeployment *ImageDeploymentPayload `json:"-"`
 	FileTransfer    *FileTransferPayload    `json:"-"`
 	ModelWorkspace  *ModelWorkspacePayload  `json:"-"`
+	DockerInventory *DockerInventoryPayload `json:"-"`
+}
+
+type DockerInventoryPayload struct {
+	Action string `json:"action"`
+	Target string `json:"target"`
+}
+
+func (p DockerInventoryPayload) Validate() error {
+	if len(p.Target) == 0 || len(p.Target) > 512 || strings.TrimSpace(p.Target) != p.Target || strings.HasPrefix(p.Target, "-") {
+		return fmt.Errorf("Docker target is invalid")
+	}
+	switch p.Action {
+	case "INSPECT_IMAGE", "DELETE_IMAGE":
+		if strings.HasPrefix(p.Target, "sha256:") {
+			if !regexp.MustCompile(`^sha256:[0-9a-f]{64}$`).MatchString(p.Target) {
+				return fmt.Errorf("Docker image ID is invalid")
+			}
+		} else if _, err := reference.ParseNormalizedNamed(p.Target); err != nil {
+			return fmt.Errorf("Docker image reference is invalid: %w", err)
+		}
+	case "DELETE_CONTAINER":
+		if !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,255}$`).MatchString(p.Target) {
+			return fmt.Errorf("Docker container target is invalid")
+		}
+	default:
+		return fmt.Errorf("Docker inventory action is invalid")
+	}
+	return nil
 }
 
 type FileTransferPayload struct {
@@ -82,6 +114,8 @@ type ImageDeploymentPayload struct {
 	RegistryDigest string `json:"registryDigest"`
 	UpdatePolicy   string `json:"updatePolicy"`
 	IdempotencyKey string `json:"idempotencyKey"`
+	ImageName      string `json:"imageName,omitempty"`
+	Overwrite      bool   `json:"overwrite,omitempty"`
 }
 
 type UpgradePayload struct {
@@ -195,13 +229,31 @@ func DecodeCommandAt(data []byte, now time.Time, allowInsecureLoopback bool) (Co
 	if command.Version != 1 {
 		return Command{}, fmt.Errorf("command type or version is unsupported")
 	}
+	if command.Type == DockerInventoryAction {
+		var payload DockerInventoryPayload
+		if err := decodeStrict(command.Payload, &payload); err != nil {
+			return Command{}, err
+		}
+		if err := payload.Validate(); err != nil {
+			return Command{}, err
+		}
+		if command.LeaseExpiresAt.IsZero() || !command.LeaseExpiresAt.After(now) {
+			return Command{}, fmt.Errorf("command lease is expired or missing")
+		}
+		command.DockerInventory = &payload
+		return command, nil
+	}
 	if command.Type == DeployImage {
 		var deployment ImageDeploymentPayload
-		if err := decodeStrict(command.Payload, &deployment); err != nil ||
-			!uuidPattern.MatchString(deployment.AgentID) || !uuidPattern.MatchString(deployment.DeploymentID) ||
-			(deployment.ComponentType != "ANNOTATION" && deployment.ComponentType != "EDITOR") ||
-			!regexp.MustCompile(`^sha256:[0-9a-f]{64}$`).MatchString(deployment.RegistryDigest) ||
-			(deployment.UpdatePolicy != "IMAGE_ONLY" && deployment.UpdatePolicy != "UPDATE_CONTAINERS") ||
+		if err := decodeStrict(command.Payload, &deployment); err != nil {
+			return Command{}, fmt.Errorf("image deployment payload is invalid")
+		}
+		direct := regexp.MustCompile(`^[a-z0-9]+(?:[._/-][a-z0-9]+)*:[A-Za-z0-9._-]+$`)
+		legacy := (deployment.ComponentType == "ANNOTATION" || deployment.ComponentType == "EDITOR") &&
+			regexp.MustCompile(`^sha256:[0-9a-f]{64}$`).MatchString(deployment.RegistryDigest) &&
+			(deployment.UpdatePolicy == "IMAGE_ONLY" || deployment.UpdatePolicy == "UPDATE_CONTAINERS")
+		if !uuidPattern.MatchString(deployment.AgentID) || !uuidPattern.MatchString(deployment.DeploymentID) ||
+			(!direct.MatchString(deployment.ImageName) && !legacy) ||
 			len(deployment.IdempotencyKey) == 0 || len(deployment.IdempotencyKey) > 128 {
 			return Command{}, fmt.Errorf("image deployment payload is invalid")
 		}
