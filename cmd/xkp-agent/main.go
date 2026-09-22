@@ -27,7 +27,7 @@ import (
 	upgradepkg "xkp-agent/internal/upgrade"
 )
 
-const version = "0.2.34"
+const version = "0.2.35"
 
 func main() {
 	configPath := flag.String("config", "/etc/xkp-agent/config.yaml", "configuration file")
